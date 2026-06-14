@@ -61,6 +61,7 @@ async function getToken() {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshTok)}`,
+    referrerPolicy: 'no-referrer',
   });
   const d = await res.json();
   if (!res.ok) throw new Error('Session expired — please sign in again');
@@ -109,14 +110,20 @@ function docToObj(doc) {
 
 async function fsGet(path) {
   const t   = await getToken();
-  const res = await fetch(`${FS_BASE}/${path}`, { headers: { Authorization: `Bearer ${t}` } });
+  const res = await fetch(`${FS_BASE}/${path}`, {
+    headers: { Authorization: `Bearer ${t}` },
+    referrerPolicy: 'no-referrer',
+  });
   if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
   return res.json();
 }
 
 async function fsList(path) {
   const t   = await getToken();
-  const res = await fetch(`${FS_BASE}/${path}?pageSize=500`, { headers: { Authorization: `Bearer ${t}` } });
+  const res = await fetch(`${FS_BASE}/${path}?pageSize=500`, {
+    headers: { Authorization: `Bearer ${t}` },
+    referrerPolicy: 'no-referrer',
+  });
   if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
   const d = await res.json();
   return (d.documents || []).map(docToObj);
@@ -129,6 +136,7 @@ async function fsPatch(path, fields, masks) {
     method:  'PATCH',
     headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify({ fields: objToFS(fields) }),
+    referrerPolicy: 'no-referrer',
   });
   if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
   return res.json();
@@ -158,6 +166,7 @@ document.addEventListener('DOMContentLoaded', () => {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ email, password: pass, returnSecureToken: true }),
+        referrerPolicy: 'no-referrer',
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error?.message || 'Sign in failed');
@@ -183,7 +192,9 @@ function friendlyErr(msg) {
     return 'Incorrect email or password.';
   if (msg.includes('TOO_MANY_ATTEMPTS'))
     return 'Too many attempts. Try again later.';
-  return 'Sign in failed. Check your credentials.';
+  if (msg.includes('API_KEY_HTTP_REFERRER_BLOCKED'))
+    return 'API key is domain-restricted. See Firebase Console → Authentication → Settings → Authorized domains → add mosreaty1.github.io';
+  return 'Sign in failed: ' + msg;
 }
 
 function logout() {
