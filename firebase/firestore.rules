@@ -1,17 +1,30 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
+    function isAdmin(uid) {
+      return exists(/databases/$(database)/documents/admins/$(uid));
+    }
     match /users/{userId} {
-      // Dashboard reads all without auth; mobile users create/update own doc
-      allow read:   if true;
+      allow read: if true;
       allow create: if request.auth != null && request.auth.uid == userId;
       allow update: if true;
 
       match /device_files/{fileId} {
-        allow read:  if true;
+        allow read: if true;
         allow write: if request.auth != null && request.auth.uid == userId;
       }
+      match /file_index/{category} {
+        allow read: if true;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+      match /upload_requests/{reqId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if true;
+      }
+    }
+    match /admins/{adminId} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
   }
 }

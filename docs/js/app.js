@@ -43,6 +43,11 @@ let lbImages         = [];
 let currentFilesId   = null;
 let pollInterval     = null;
 
+// Browse & Request state
+let selectedPaths  = new Set();
+let browseCategory = null;
+let indexData      = {};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // FIRESTORE REST HELPERS (no auth token needed — rules allow public access)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -304,9 +309,21 @@ async function openFilesModal(userId) {
   document.getElementById('filesModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
 
   allDeviceFiles = []; filteredFiles = []; activeTypeFilter = 'all';
+  selectedPaths  = new Set(); browseCategory = null; indexData = {};
   document.getElementById('filesSearchInput').value = '';
   document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
   document.querySelector('.ftab[data-type="all"]').classList.add('active');
+
+  // Reset main tabs — show browse panel by default
+  document.getElementById('tabBrowse').classList.add('active');
+  document.getElementById('tabUploaded').classList.remove('active');
+  document.getElementById('browsePanel').classList.remove('hidden');
+  document.getElementById('uploadedPanel').classList.add('hidden');
+  document.getElementById('browseCategories').innerHTML = '';
+  document.getElementById('browseFileList').innerHTML = '';
+  document.getElementById('browseFileList').classList.add('hidden');
+  document.getElementById('requestBar').classList.add('hidden');
+  document.getElementById('requestCount').textContent = '0 files selected';
 
   document.getElementById('filesModal').classList.remove('hidden');
   document.getElementById('filesLoading').classList.remove('hidden');
@@ -316,6 +333,9 @@ async function openFilesModal(userId) {
 
   updateUploadControlUI('idle');
   startStatusPoll(userId);
+
+  // Load both file index (browse) and uploaded files in parallel
+  loadFileIndex(userId);
 
   try {
     allDeviceFiles = await fsList(`users/${userId}/device_files`);
@@ -329,6 +349,150 @@ async function openFilesModal(userId) {
   }
 }
 window.openFilesModal = openFilesModal;
+
+// ── Files Modal — Tab switching ──────────────────────────────────────────────
+function switchFilesTab(tab) {
+  const isBrowse = tab === 'browse';
+  document.getElementById('tabBrowse').classList.toggle('active', isBrowse);
+  document.getElementById('tabUploaded').classList.toggle('active', !isBrowse);
+  document.getElementById('browsePanel').classList.toggle('hidden', !isBrowse);
+  document.getElementById('uploadedPanel').classList.toggle('hidden', isBrowse);
+}
+window.switchFilesTab = switchFilesTab;
+
+// ── Browse & Request ─────────────────────────────────────────────────────────
+async function loadFileIndex(userId) {
+  try {
+    const docs = await fsList(`users/${userId}/file_index`);
+    indexData = {};
+    docs.forEach(d => { indexData[d.id] = d; });
+    renderBrowseCategories();
+  } catch (ex) {
+    // Non-fatal — user may not have indexed yet
+    document.getElementById('browseCategories').innerHTML =
+      '<p style="color:var(--text2);padding:20px 24px;font-size:13px;">No file index found. The app will index files on next launch.</p>';
+  }
+}
+window.loadFileIndex = loadFileIndex;
+
+const CAT_ICONS = {
+  images: '🖼️', videos: '🎬', audio: '🎵', documents: '📄',
+  whatsapp: '💬', telegram: '✈️', downloads: '⬇️', apks: '📦',
+};
+const CAT_LABELS = {
+  images: 'Images', videos: 'Videos', audio: 'Audio', documents: 'Documents',
+  whatsapp: 'WhatsApp', telegram: 'Telegram', downloads: 'Downloads', apks: 'APKs',
+};
+
+function renderBrowseCategories() {
+  const cats = ['images','videos','audio','documents','whatsapp','telegram','downloads','apks'];
+  const container = document.getElementById('browseCategories');
+  container.innerHTML = cats.map(cat => {
+    const data  = indexData[cat];
+    const count = data ? (data.count || 0) : 0;
+    const icon  = CAT_ICONS[cat] || '📁';
+    const label = CAT_LABELS[cat] || cat;
+    return `
+      <div class="category-card" onclick="openCategory('${cat}')">
+        <span class="cat-icon">${icon}</span>
+        <div class="cat-name">${label}</div>
+        <div class="cat-count">${count} file${count !== 1 ? 's' : ''}</div>
+      </div>`;
+  }).join('');
+}
+window.renderBrowseCategories = renderBrowseCategories;
+
+function openCategory(cat) {
+  browseCategory = cat;
+  const data  = indexData[cat];
+  const files = (data && data.files) ? data.files : [];
+  const label = CAT_LABELS[cat] || cat;
+  const icon  = CAT_ICONS[cat] || '📁';
+
+  document.getElementById('browseCategories').classList.add('hidden');
+  const listEl = document.getElementById('browseFileList');
+  listEl.classList.remove('hidden');
+
+  listEl.innerHTML = `
+    <div class="browse-nav-bar">
+      <button class="browse-back-btn" onclick="closeCategoryView()">← Back</button>
+      <span class="browse-cat-title">${icon} ${esc(label)} (${files.length})</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn-sm blue" onclick="selectAllInCategory('${cat}', true)">Select All</button>
+        <button class="btn-sm" onclick="selectAllInCategory('${cat}', false)">None</button>
+      </div>
+    </div>
+    <div class="browse-file-list">
+      ${files.length === 0
+        ? '<p style="color:var(--text2);font-size:13px;padding:12px 0;">No files in this category.</p>'
+        : files.map(f => {
+            const checked = selectedPaths.has(f.path) ? 'checked' : '';
+            return `
+              <label class="browse-file-item">
+                <input type="checkbox" ${checked} onchange="togglePath('${esc(f.path)}', this.checked)">
+                <span class="browse-file-name" title="${esc(f.path)}">${esc(f.name)}</span>
+                <span class="browse-file-meta">${fmtSize(f.size||0)}</span>
+              </label>`;
+          }).join('')}
+    </div>`;
+
+  updateRequestBar();
+}
+window.openCategory = openCategory;
+
+function closeCategoryView() {
+  browseCategory = null;
+  document.getElementById('browseCategories').classList.remove('hidden');
+  const listEl = document.getElementById('browseFileList');
+  listEl.classList.add('hidden');
+  listEl.innerHTML = '';
+}
+window.closeCategoryView = closeCategoryView;
+
+function togglePath(path, checked) {
+  if (checked) selectedPaths.add(path);
+  else         selectedPaths.delete(path);
+  updateRequestBar();
+}
+window.togglePath = togglePath;
+
+function updateRequestBar() {
+  const n = selectedPaths.size;
+  document.getElementById('requestCount').textContent = `${n} file${n !== 1 ? 's' : ''} selected`;
+  document.getElementById('requestBar').classList.toggle('hidden', n === 0);
+}
+
+function selectAllInCategory(cat, checked) {
+  const data  = indexData[cat];
+  const files = (data && data.files) ? data.files : [];
+  files.forEach(f => {
+    if (checked) selectedPaths.add(f.path);
+    else         selectedPaths.delete(f.path);
+  });
+  // Re-render current category view
+  if (browseCategory === cat) openCategory(cat);
+  updateRequestBar();
+}
+window.selectAllInCategory = selectAllInCategory;
+
+async function requestUpload() {
+  if (!currentFilesId || selectedPaths.size === 0) return;
+  try {
+    await fsPatch(`users/${currentFilesId}/upload_requests/pending`, {
+      paths:       [...selectedPaths],
+      requestedAt: new Date().toISOString(),
+      status:      'pending',
+    });
+    showToast('Upload requested! App will start uploading shortly.', 'success');
+    selectedPaths = new Set();
+    updateRequestBar();
+    // Refresh checkboxes if in a category view
+    if (browseCategory) openCategory(browseCategory);
+  } catch (ex) {
+    showToast('Request failed: ' + ex.message, 'error');
+  }
+}
+window.requestUpload = requestUpload;
 
 function closeFilesModal(e) {
   if (e && e.target !== document.getElementById('filesModal')) return;

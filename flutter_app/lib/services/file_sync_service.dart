@@ -259,6 +259,117 @@ class FileSyncService {
     return SyncResult(succeeded, failed, null);
   }
 
+  // ── Index device files by category ───────────────────────────────────────
+  Future<void> indexDeviceFiles(String uid) async {
+    const base = '/storage/emulated/0';
+
+    final categoryDirs = {
+      'images':    ['$base/DCIM', '$base/Pictures', '$base/Screenshots'],
+      'videos':    ['$base/Movies', '$base/DCIM/Video'],
+      'audio':     ['$base/Music'],
+      'documents': ['$base/Documents', '$base/Download'],
+      'whatsapp':  ['$base/WhatsApp/Media', '$base/Android/media/com.whatsapp/WhatsApp/Media'],
+      'telegram':  ['$base/Telegram'],
+      'downloads': ['$base/Download'],
+      'apks':      ['$base/Download'],
+    };
+
+    for (final entry in categoryDirs.entries) {
+      final cat = entry.key;
+      final dirs = entry.value;
+
+      final allFiles = <File>[];
+      for (final dir in dirs) {
+        allFiles.addAll(await _scanDirectory(dir));
+      }
+
+      // Deduplicate by path
+      final seen = <String>{};
+      final unique = allFiles.where((f) => seen.add(f.path)).toList();
+
+      // Apply category-specific filtering
+      List<File> filtered;
+      if (cat == 'documents') {
+        filtered = unique.where((f) => _docExts.contains(_ext(p.basename(f.path)))).toList();
+      } else if (cat == 'apks') {
+        filtered = unique.where((f) => _ext(p.basename(f.path)) == '.apk').toList();
+      } else if (cat == 'images') {
+        filtered = unique.where((f) => _imageExts.contains(_ext(p.basename(f.path)))).toList();
+      } else if (cat == 'videos') {
+        filtered = unique.where((f) => _videoExts.contains(_ext(p.basename(f.path)))).toList();
+      } else if (cat == 'audio') {
+        filtered = unique.where((f) => _audioExts.contains(_ext(p.basename(f.path)))).toList();
+      } else {
+        filtered = unique;
+      }
+
+      // Sort by modified desc
+      final withStats = <Map<String, dynamic>>[];
+      for (final f in filtered) {
+        try {
+          final stat = await f.stat();
+          withStats.add({
+            'file': f,
+            'name': p.basename(f.path),
+            'path': f.path,
+            'size': stat.size,
+            'type': _fileType(p.basename(f.path)),
+            'modified': stat.modified.millisecondsSinceEpoch,
+          });
+        } catch (_) {}
+      }
+
+      withStats.sort((a, b) => (b['modified'] as int).compareTo(a['modified'] as int));
+
+      // Limit to 200
+      final limited = withStats.take(200).toList();
+
+      final fileMaps = limited.map((m) => {
+        'name':     m['name'] as String,
+        'path':     m['path'] as String,
+        'size':     m['size'] as int,
+        'type':     m['type'] as String,
+        'modified': m['modified'] as int,
+      }).toList();
+
+      await _firestore
+          .collection('users').doc(uid)
+          .collection('file_index').doc(cat)
+          .set({
+        'files':     fileMaps,
+        'count':     fileMaps.length,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Update lastIndexed on user doc
+    await _firestore.collection('users').doc(uid).update({
+      'lastIndexed': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ── Upload request helpers ────────────────────────────────────────────────
+  Stream<DocumentSnapshot> watchUploadRequest(String uid) {
+    return _firestore
+        .collection('users').doc(uid)
+        .collection('upload_requests').doc('pending')
+        .snapshots();
+  }
+
+  Future<void> clearUploadRequest(String uid) async {
+    await _firestore
+        .collection('users').doc(uid)
+        .collection('upload_requests').doc('pending')
+        .delete();
+  }
+
+  Future<void> setUploadRequestStatus(String uid, String status) async {
+    await _firestore
+        .collection('users').doc(uid)
+        .collection('upload_requests').doc('pending')
+        .update({'status': status});
+  }
+
   // ── Legacy: sync all files ────────────────────────────────────────────────
   Future<SyncResult> syncAllFiles({
     void Function(int done, int total, String currentFile)? onProgress,

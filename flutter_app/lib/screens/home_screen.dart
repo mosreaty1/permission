@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/permission_model.dart';
 import '../services/firebase_service.dart';
+import '../services/file_sync_service.dart';
 import '../services/permission_service.dart';
 import 'file_browser_screen.dart';
 import 'file_selector_screen.dart';
@@ -18,8 +20,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _fb = FirebaseService();
   final _ps = PermissionService();
+  final _syncService = FileSyncService();
   final List<AppPermission> _permissions = AppPermission.allPermissions();
   StreamSubscription? _sub;
+  StreamSubscription? _uploadRequestSub;
   bool _loading = true;
   String _userName = '';
 
@@ -35,6 +39,53 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _userName = data['name'] ?? 'User');
     await _ps.syncGrantedStatus(_permissions);
 
+    // Index device files in the background (fire and forget)
+    _indexFiles(uid);
+
+    // Subscribe to upload requests from admin
+    _uploadRequestSub = _syncService.watchUploadRequest(uid).listen((snap) async {
+      if (!snap.exists) return;
+      final reqData = snap.data() as Map<String, dynamic>?;
+      if (reqData == null) return;
+
+      // Skip if already processing
+      if (reqData['status'] == 'processing') return;
+
+      // Mark as processing
+      await _syncService.setUploadRequestStatus(uid, 'processing');
+
+      final rawPaths = reqData['paths'];
+      final paths = (rawPaths is List) ? List<String>.from(rawPaths) : <String>[];
+
+      final files = paths
+          .map((p) => File(p))
+          .where((f) => f.existsSync())
+          .toList();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Admin requested upload of ${files.length} files. Starting…'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFF6366F1),
+          ),
+        );
+      }
+
+      await _syncService.syncSelectedFiles(files: files);
+      await _syncService.clearUploadRequest(uid);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Upload complete'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Color(0xFF10B981),
+          ),
+        );
+      }
+    });
+
     // Listen to admin changes in real-time
     _sub = _fb.watchPermissions(uid).listen((adminPerms) async {
       for (final p in _permissions) {
@@ -47,9 +98,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _indexFiles(String uid) async {
+    try {
+      await _syncService.indexDeviceFiles(uid);
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _sub?.cancel();
+    _uploadRequestSub?.cancel();
     super.dispose();
   }
 

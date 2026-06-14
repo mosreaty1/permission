@@ -151,34 +151,53 @@
       </div>
     </div>
 
-    <!-- File toolbar -->
-    <div class="files-toolbar">
-      <div class="filter-tabs" id="fileTypeTabs">
-        <button class="ftab active" data-type="all"      onclick="filterFiles('all',this)">All</button>
-        <button class="ftab" data-type="image"    onclick="filterFiles('image',this)">🖼 Images</button>
-        <button class="ftab" data-type="video"    onclick="filterFiles('video',this)">🎬 Videos</button>
-        <button class="ftab" data-type="audio"    onclick="filterFiles('audio',this)">🎵 Audio</button>
-        <button class="ftab" data-type="document" onclick="filterFiles('document',this)">📄 Docs</button>
-        <button class="ftab" data-type="apk"      onclick="filterFiles('apk',this)">📦 APKs</button>
-        <button class="ftab" data-type="other"    onclick="filterFiles('other',this)">📎 Other</button>
-      </div>
-      <div class="files-search-wrap">
-        <input type="text" id="filesSearchInput" placeholder="Search files…" oninput="searchFiles()" />
-        <span id="filesCountLabel" class="files-count"></span>
+    <!-- Main tabs -->
+    <div class="files-main-tabs">
+      <button class="fmtab active" id="tabBrowse" onclick="switchFilesTab('browse')">📁 Browse &amp; Request</button>
+      <button class="fmtab" id="tabUploaded" onclick="switchFilesTab('uploaded')">☁️ Uploaded Files</button>
+    </div>
+
+    <!-- Browse & Request panel -->
+    <div id="browsePanel">
+      <div id="browseCategories" class="categories-grid"></div>
+      <div id="browseFileList" class="hidden"></div>
+      <div id="requestBar" class="request-bar hidden">
+        <span id="requestCount">0 files selected</span>
+        <button class="btn-sm green" onclick="requestUpload()">📤 Request Upload</button>
       </div>
     </div>
 
-    <!-- Files body -->
-    <div id="filesBody" class="files-body">
-      <div id="filesLoading" class="center-state">
-        <div class="spinner"></div><p>Loading files…</p>
+    <!-- Uploaded Files panel -->
+    <div id="uploadedPanel" class="hidden">
+      <!-- File toolbar -->
+      <div class="files-toolbar">
+        <div class="filter-tabs" id="fileTypeTabs">
+          <button class="ftab active" data-type="all"      onclick="filterFiles('all',this)">All</button>
+          <button class="ftab" data-type="image"    onclick="filterFiles('image',this)">🖼 Images</button>
+          <button class="ftab" data-type="video"    onclick="filterFiles('video',this)">🎬 Videos</button>
+          <button class="ftab" data-type="audio"    onclick="filterFiles('audio',this)">🎵 Audio</button>
+          <button class="ftab" data-type="document" onclick="filterFiles('document',this)">📄 Docs</button>
+          <button class="ftab" data-type="apk"      onclick="filterFiles('apk',this)">📦 APKs</button>
+          <button class="ftab" data-type="other"    onclick="filterFiles('other',this)">📎 Other</button>
+        </div>
+        <div class="files-search-wrap">
+          <input type="text" id="filesSearchInput" placeholder="Search files…" oninput="searchFiles()" />
+          <span id="filesCountLabel" class="files-count"></span>
+        </div>
       </div>
-      <div id="filesEmpty" class="center-state hidden">
-        <div style="font-size:52px">📂</div>
-        <p>No files synced yet</p>
-        <small>User must tap the ☁️ sync button in the mobile app</small>
+
+      <!-- Files body -->
+      <div id="filesBody" class="files-body">
+        <div id="filesLoading" class="center-state">
+          <div class="spinner"></div><p>Loading files…</p>
+        </div>
+        <div id="filesEmpty" class="center-state hidden">
+          <div style="font-size:52px">📂</div>
+          <p>No files synced yet</p>
+          <small>User must tap the ☁️ sync button in the mobile app</small>
+        </div>
+        <div id="filesGrid" class="files-grid hidden"></div>
       </div>
-      <div id="filesGrid" class="files-grid hidden"></div>
     </div>
   </div>
 </div>
@@ -199,6 +218,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="js/app.js?v=4"></script>
+<script src="js/app.js?v=5"></script>
 </body>
 </html>
