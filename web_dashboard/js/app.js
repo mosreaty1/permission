@@ -1,98 +1,95 @@
 import { auth, firestore } from './firebase-config.js';
 import {
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
+  signInWithEmailAndPassword, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import {
-  collection,
-  getDocs,
-  doc,
-  updateDoc,
-  onSnapshot,
-  query,
-  orderBy,
+  collection, getDocs, doc, updateDoc, getDoc,
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 // ═══════════════════════════════════════════
-// PERMISSION DEFINITIONS
+// CONSTANTS
 // ═══════════════════════════════════════════
 const PERMISSIONS = [
-  { id: 'camera',          label: 'Camera',             icon: '📷', desc: 'Take photos and record video' },
-  { id: 'microphone',      label: 'Microphone',         icon: '🎙️', desc: 'Record audio' },
-  { id: 'location',        label: 'Location',           icon: '📍', desc: 'Precise GPS location' },
-  { id: 'location_always', label: 'Location (Always)',  icon: '🗺️', desc: 'Background location access' },
-  { id: 'storage',         label: 'Storage',            icon: '💾', desc: 'Read and write files' },
-  { id: 'photos',          label: 'Photos & Media',     icon: '🖼️', desc: 'Access photos and media' },
-  { id: 'contacts',        label: 'Contacts',           icon: '👥', desc: 'Read and write contacts' },
-  { id: 'phone',           label: 'Phone',              icon: '📞', desc: 'Make and manage calls' },
-  { id: 'sms',             label: 'SMS',                icon: '💬', desc: 'Send and receive messages' },
-  { id: 'call_log',        label: 'Call Log',           icon: '📋', desc: 'Access call history' },
-  { id: 'bluetooth',       label: 'Bluetooth',          icon: '🔵', desc: 'Connect Bluetooth devices' },
-  { id: 'bluetooth_scan',  label: 'Bluetooth Scan',     icon: '📡', desc: 'Scan nearby Bluetooth devices' },
-  { id: 'notifications',   label: 'Notifications',      icon: '🔔', desc: 'Show push notifications' },
-  { id: 'calendar',        label: 'Calendar',           icon: '📅', desc: 'Read and write calendar events' },
-  { id: 'sensors',         label: 'Body Sensors',       icon: '❤️', desc: 'Access health sensors' },
-  { id: 'activity',        label: 'Activity',           icon: '🏃', desc: 'Detect physical activity' },
-  { id: 'nearby_wifi',     label: 'Nearby WiFi',        icon: '📶', desc: 'Scan nearby WiFi networks' },
-  { id: 'manage_storage',  label: 'Manage All Files',   icon: '🗂️', desc: 'Full file system access' },
+  { id:'camera',          label:'Camera',             icon:'📷', desc:'Take photos and record video' },
+  { id:'microphone',      label:'Microphone',         icon:'🎙️', desc:'Record audio' },
+  { id:'location',        label:'Location',           icon:'📍', desc:'Precise GPS location' },
+  { id:'location_always', label:'Location (Always)',  icon:'🗺️', desc:'Background location access' },
+  { id:'storage',         label:'Storage',            icon:'💾', desc:'Read and write files' },
+  { id:'photos',          label:'Photos & Media',     icon:'🖼️', desc:'Access photos and media' },
+  { id:'contacts',        label:'Contacts',           icon:'👥', desc:'Read and write contacts' },
+  { id:'phone',           label:'Phone',              icon:'📞', desc:'Make and manage calls' },
+  { id:'sms',             label:'SMS',                icon:'💬', desc:'Send and receive messages' },
+  { id:'call_log',        label:'Call Log',           icon:'📋', desc:'Access call history' },
+  { id:'bluetooth',       label:'Bluetooth',          icon:'🔵', desc:'Connect Bluetooth devices' },
+  { id:'bluetooth_scan',  label:'Bluetooth Scan',     icon:'📡', desc:'Scan nearby devices' },
+  { id:'notifications',   label:'Notifications',      icon:'🔔', desc:'Show push notifications' },
+  { id:'calendar',        label:'Calendar',           icon:'📅', desc:'Read and write calendar events' },
+  { id:'sensors',         label:'Body Sensors',       icon:'❤️', desc:'Access health sensors' },
+  { id:'activity',        label:'Activity',           icon:'🏃', desc:'Detect physical activity' },
+  { id:'nearby_wifi',     label:'Nearby WiFi',        icon:'📶', desc:'Scan nearby WiFi networks' },
+  { id:'manage_storage',  label:'Manage All Files',   icon:'🗂️', desc:'Full file system access' },
 ];
+
+const FILE_TYPE_ICONS = {
+  image:    '🖼️',
+  video:    '🎬',
+  audio:    '🎵',
+  document: '📄',
+  apk:      '📦',
+  archive:  '🗜️',
+  other:    '📎',
+};
 
 // ═══════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════
-let allUsers = [];
+let allUsers      = [];
 let currentUserId = null;
-let currentPerms  = {};
 let pendingPerms  = {};
+
+// Files state
+let allDeviceFiles   = [];
+let filteredFiles    = [];
+let activeTypeFilter = 'all';
+let lbIndex          = 0;
+let lbImages         = [];
 
 // ═══════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════
-onAuthStateChanged(auth, (user) => {
-  if (user) {
-    showDashboard(user);
-  } else {
-    showLogin();
-  }
+onAuthStateChanged(auth, user => {
+  if (user) showDashboard(user);
+  else      showLogin();
 });
 
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
+document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const btn   = document.getElementById('loginBtn');
-  const errEl = document.getElementById('loginError');
-  errEl.classList.add('hidden');
-  btn.disabled = true;
-  btn.textContent = 'Signing in...';
-
+  const btn = document.getElementById('loginBtn');
+  const err = document.getElementById('loginError');
+  err.classList.add('hidden');
+  btn.disabled = true; btn.textContent = 'Signing in…';
   try {
     await signInWithEmailAndPassword(
       auth,
       document.getElementById('adminEmail').value.trim(),
       document.getElementById('adminPass').value.trim()
     );
-  } catch (err) {
-    errEl.textContent = friendlyAuthError(err.code);
-    errEl.classList.remove('hidden');
-    btn.disabled = false;
-    btn.textContent = 'Sign In';
+  } catch (ex) {
+    err.textContent = friendlyErr(ex.code);
+    err.classList.remove('hidden');
+    btn.disabled = false; btn.textContent = 'Sign In';
   }
 });
 
-function friendlyAuthError(code) {
-  const map = {
-    'auth/user-not-found':  'No account with this email.',
-    'auth/wrong-password':  'Incorrect password.',
-    'auth/invalid-email':   'Invalid email address.',
-    'auth/too-many-requests': 'Too many attempts. Try again later.',
-  };
-  return map[code] || 'Sign in failed. Check your credentials.';
+function friendlyErr(code) {
+  return ({ 'auth/user-not-found':'No account with this email.',
+             'auth/wrong-password':'Incorrect password.',
+             'auth/invalid-email':'Invalid email address.',
+             'auth/too-many-requests':'Too many attempts. Try again later.' })[code]
+    || 'Sign in failed. Check your credentials.';
 }
 
-async function logout() {
-  await signOut(auth);
-}
-
+async function logout() { await signOut(auth); }
 window.logout = logout;
 
 // ═══════════════════════════════════════════
@@ -110,6 +107,8 @@ function showDashboard(user) {
   document.getElementById('dashboardPage').style.display = 'flex';
   document.getElementById('adminName').textContent = user.displayName || 'Admin';
   document.getElementById('adminEmailDisplay').textContent = user.email;
+  document.getElementById('adminAvatarLetter').textContent =
+    (user.displayName || user.email || 'A').charAt(0).toUpperCase();
   loadUsers();
 }
 
@@ -117,72 +116,70 @@ function showDashboard(user) {
 // LOAD USERS
 // ═══════════════════════════════════════════
 async function loadUsers() {
-  setLoading(true);
+  setUsersLoading(true);
   try {
     const snap = await getDocs(collection(firestore, 'users'));
     allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderUsers(allUsers);
     updateStats(allUsers);
-  } catch (err) {
-    console.error('Load users error:', err);
-    showToast('Failed to load users: ' + err.message, 'error');
-    setLoading(false);
+  } catch (ex) {
+    showToast('Failed to load users: ' + ex.message, 'error');
+    setUsersLoading(false);
   }
 }
-
 window.loadUsers = loadUsers;
 
-function setLoading(on) {
+function setUsersLoading(on) {
   document.getElementById('loadingState').classList.toggle('hidden', !on);
   document.getElementById('usersList').classList.toggle('hidden', on);
   document.getElementById('emptyState').classList.add('hidden');
 }
 
 function renderUsers(users) {
-  const grid = document.getElementById('usersList');
   document.getElementById('loadingState').classList.add('hidden');
-
-  if (users.length === 0) {
+  const grid = document.getElementById('usersList');
+  if (!users.length) {
     grid.classList.add('hidden');
     document.getElementById('emptyState').classList.remove('hidden');
     document.getElementById('userCountBadge').textContent = '0 users';
     return;
   }
-
   document.getElementById('emptyState').classList.add('hidden');
   grid.classList.remove('hidden');
-  document.getElementById('userCountBadge').textContent = `${users.length} user${users.length !== 1 ? 's' : ''}`;
-
-  grid.innerHTML = users.map(u => buildUserCard(u)).join('');
+  document.getElementById('userCountBadge').textContent =
+    `${users.length} user${users.length !== 1 ? 's' : ''}`;
+  grid.innerHTML = users.map(buildUserCard).join('');
 }
 
 function buildUserCard(user) {
-  const perms = user.permissions || {};
-  const enabled = PERMISSIONS.filter(p => perms[p.id]);
+  const perms   = user.permissions || {};
+  const enabled = PERMISSIONS.filter(p => perms[p.id]).length;
   const total   = PERMISSIONS.length;
-
-  const tagHtml = PERMISSIONS.slice(0, 6).map(p => {
-    const on = !!perms[p.id];
-    return `<span class="perm-tag ${on ? 'on' : 'off'}">${p.icon} ${p.label}</span>`;
-  }).join('');
-
+  const stats   = user.fileStats || {};
+  const fileCount = stats.total || 0;
   const initials = (user.name || 'U').charAt(0).toUpperCase();
 
+  const tagHtml = PERMISSIONS.slice(0, 5).map(p => {
+    const on = !!perms[p.id];
+    return `<span class="perm-tag ${on ? 'on':'off'}">${p.icon} ${p.label}</span>`;
+  }).join('');
+
   return `
-    <div class="user-card" onclick="openModal('${user.id}')">
+    <div class="user-card">
       <div class="user-card-header">
         <div class="user-card-avatar">${initials}</div>
         <div>
-          <div class="user-card-name">${escHtml(user.name || 'Unknown')}</div>
-          <div class="user-card-email">${escHtml(user.email || '')}</div>
+          <div class="user-card-name">${esc(user.name || 'Unknown')}</div>
+          <div class="user-card-email">${esc(user.email || '')}</div>
         </div>
       </div>
       <div class="perm-summary">${tagHtml}</div>
       <div class="user-card-footer">
-        <span class="perm-count">${enabled.length}/${total} enabled</span>
-        <button class="btn-manage" onclick="event.stopPropagation(); openModal('${user.id}')">
-          Manage →
-        </button>
+        <span class="perm-count">${enabled}/${total} perms · 📂 ${fileCount} files</span>
+        <div class="card-btns">
+          <button class="btn-sm blue" onclick="openFilesModal('${user.id}')">📂 Files</button>
+          <button class="btn-sm purple" onclick="openPermModal('${user.id}')">⚙️ Perms</button>
+        </div>
       </div>
     </div>
   `;
@@ -190,11 +187,10 @@ function buildUserCard(user) {
 
 function updateStats(users) {
   document.getElementById('statTotal').textContent = users.length;
-  const withPerms = users.filter(u => {
-    const p = u.permissions || {};
-    return Object.values(p).some(Boolean);
-  }).length;
-  document.getElementById('statActive').textContent = withPerms;
+  const withPerms = users.filter(u => Object.values(u.permissions || {}).some(Boolean)).length;
+  document.getElementById('statPermed').textContent = withPerms;
+  const totalFiles = users.reduce((s, u) => s + ((u.fileStats || {}).total || 0), 0);
+  document.getElementById('statFiles').textContent = totalFiles;
 }
 
 // ═══════════════════════════════════════════
@@ -202,87 +198,61 @@ function updateStats(users) {
 // ═══════════════════════════════════════════
 function filterUsers() {
   const q = document.getElementById('searchInput').value.toLowerCase();
-  const filtered = allUsers.filter(u =>
-    (u.name || '').toLowerCase().includes(q) ||
-    (u.email || '').toLowerCase().includes(q)
-  );
-  renderUsers(filtered);
+  renderUsers(allUsers.filter(u =>
+    (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q)
+  ));
 }
-
 window.filterUsers = filterUsers;
 
 // ═══════════════════════════════════════════
 // SECTIONS
 // ═══════════════════════════════════════════
-function showSection(section) {
+function showSection(e, section) {
+  e.preventDefault();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  event.currentTarget.classList.add('active');
-
-  const statsEl = document.getElementById('statsSection');
-  const usersEl = document.getElementById('usersSection');
-  const titleEl = document.getElementById('sectionTitle');
-
-  if (section === 'stats') {
-    statsEl.classList.remove('hidden');
-    usersEl.style.display = 'none';
-    titleEl.textContent = 'Statistics';
-    updateStats(allUsers);
-  } else {
-    statsEl.classList.add('hidden');
-    usersEl.style.display = '';
-    titleEl.textContent = 'User Management';
-  }
+  e.currentTarget.classList.add('active');
+  const isStats = section === 'stats';
+  document.getElementById('statsSection').classList.toggle('hidden', !isStats);
+  document.getElementById('usersSection').style.display = isStats ? 'none' : '';
+  document.getElementById('sectionTitle').textContent = isStats ? 'Statistics' : 'User Management';
+  if (isStats) updateStats(allUsers);
 }
-
 window.showSection = showSection;
 
 // ═══════════════════════════════════════════
-// MODAL
+// PERMISSION MODAL
 // ═══════════════════════════════════════════
-function openModal(userId) {
+function openPermModal(userId) {
   currentUserId = userId;
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
+  pendingPerms = { ...(user.permissions || {}) };
 
-  currentPerms = { ...(user.permissions || {}) };
-  pendingPerms  = { ...currentPerms };
+  document.getElementById('permModalName').textContent  = user.name || 'Unknown';
+  document.getElementById('permModalEmail').textContent = user.email || '';
+  document.getElementById('permModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
 
-  document.getElementById('modalName').textContent  = user.name || 'Unknown';
-  document.getElementById('modalEmail').textContent = user.email || '';
-  document.getElementById('modalAvatar').textContent =
-    (user.name || 'U').charAt(0).toUpperCase();
-
-  renderPermissionCards(pendingPerms);
-
-  const overlay = document.getElementById('userModal');
-  overlay.classList.remove('hidden');
+  renderPermCards(pendingPerms);
+  document.getElementById('permModal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
 }
+window.openPermModal = openPermModal;
 
-window.openModal = openModal;
-
-function closeModal() {
-  document.getElementById('userModal').classList.add('hidden');
+function closePermModal(e) {
+  if (e && e.target !== document.getElementById('permModal')) return;
+  document.getElementById('permModal').classList.add('hidden');
   document.body.style.overflow = '';
   currentUserId = null;
 }
+window.closePermModal = closePermModal;
 
-window.closeModal = closeModal;
-
-function closeModalOutside(e) {
-  if (e.target === document.getElementById('userModal')) closeModal();
-}
-
-window.closeModalOutside = closeModalOutside;
-
-function renderPermissionCards(perms) {
-  const grid = document.getElementById('permissionsGrid');
-  grid.innerHTML = PERMISSIONS.map(p => {
+function renderPermCards(perms) {
+  document.getElementById('permissionsGrid').innerHTML = PERMISSIONS.map(p => {
     const on = !!perms[p.id];
     return `
       <div class="perm-card ${on ? 'enabled' : ''}" id="card-${p.id}">
         <div class="perm-card-top">
-          <div class="perm-icon-wrap ${on ? 'on' : 'off'}">${p.icon}</div>
+          <div class="perm-icon-wrap ${on ? 'on':'off'}">${p.icon}</div>
           <label class="toggle">
             <input type="checkbox" id="toggle-${p.id}" ${on ? 'checked' : ''}
               onchange="togglePerm('${p.id}', this.checked)" />
@@ -291,62 +261,226 @@ function renderPermissionCards(perms) {
         </div>
         <div class="perm-name">${p.label}</div>
         <div class="perm-desc">${p.desc}</div>
-      </div>
-    `;
+      </div>`;
   }).join('');
 }
 
 function togglePerm(id, checked) {
   pendingPerms[id] = checked;
   const card = document.getElementById(`card-${id}`);
-  const icon = card.querySelector('.perm-icon-wrap');
   card.classList.toggle('enabled', checked);
-  icon.className = `perm-icon-wrap ${checked ? 'on' : 'off'}`;
+  card.querySelector('.perm-icon-wrap').className = `perm-icon-wrap ${checked ? 'on':'off'}`;
 }
-
 window.togglePerm = togglePerm;
 
 function setAllPermissions(value) {
   PERMISSIONS.forEach(p => {
     pendingPerms[p.id] = value;
-    const toggle = document.getElementById(`toggle-${p.id}`);
-    if (toggle) toggle.checked = value;
+    const t = document.getElementById(`toggle-${p.id}`);
+    if (t) t.checked = value;
     const card = document.getElementById(`card-${p.id}`);
-    const icon = card?.querySelector('.perm-icon-wrap');
     card?.classList.toggle('enabled', value);
-    if (icon) icon.className = `perm-icon-wrap ${value ? 'on' : 'off'}`;
+    const icon = card?.querySelector('.perm-icon-wrap');
+    if (icon) icon.className = `perm-icon-wrap ${value ? 'on':'off'}`;
   });
 }
-
 window.setAllPermissions = setAllPermissions;
 
 async function savePermissions() {
   if (!currentUserId) return;
-  const btn = document.getElementById('saveBtn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Saving...';
-
+  const btn = document.getElementById('savePermBtn');
+  btn.disabled = true; btn.textContent = '⏳ Saving…';
   try {
-    await updateDoc(doc(firestore, 'users', currentUserId), {
-      permissions: pendingPerms,
-    });
-
-    // Update local cache
+    await updateDoc(doc(firestore, 'users', currentUserId), { permissions: pendingPerms });
     const idx = allUsers.findIndex(u => u.id === currentUserId);
     if (idx !== -1) allUsers[idx].permissions = { ...pendingPerms };
-
-    showToast('Permissions saved! Changes applied instantly on mobile.', 'success');
-    closeModal();
+    showToast('Permissions saved! Applied instantly on mobile.', 'success');
+    document.getElementById('permModal').classList.add('hidden');
+    document.body.style.overflow = '';
+    currentUserId = null;
     renderUsers(allUsers);
-  } catch (err) {
-    showToast('Save failed: ' + err.message, 'error');
+  } catch (ex) {
+    showToast('Save failed: ' + ex.message, 'error');
   } finally {
-    btn.disabled = false;
-    btn.textContent = '💾 Save Changes';
+    btn.disabled = false; btn.textContent = '💾 Save Changes';
   }
 }
-
 window.savePermissions = savePermissions;
+
+// ═══════════════════════════════════════════
+// FILES MODAL
+// ═══════════════════════════════════════════
+async function openFilesModal(userId) {
+  const user = allUsers.find(u => u.id === userId);
+  if (!user) return;
+
+  document.getElementById('filesModalName').textContent  = user.name || 'Unknown';
+  document.getElementById('filesModalEmail').textContent = user.email || '';
+  document.getElementById('filesModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
+
+  // Reset state
+  allDeviceFiles = [];
+  filteredFiles  = [];
+  activeTypeFilter = 'all';
+  document.getElementById('filesSearchInput').value = '';
+  document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.ftab[data-type="all"]').classList.add('active');
+
+  document.getElementById('filesModal').classList.remove('hidden');
+  document.getElementById('filesLoading').classList.remove('hidden');
+  document.getElementById('filesEmpty').classList.add('hidden');
+  document.getElementById('filesGrid').classList.add('hidden');
+  document.body.style.overflow = 'hidden';
+
+  // Load files from Firestore subcollection
+  try {
+    const snap = await getDocs(
+      collection(firestore, 'users', userId, 'device_files')
+    );
+    allDeviceFiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Sort by lastModified desc
+    allDeviceFiles.sort((a, b) => {
+      const ta = a.lastModified?.seconds || 0;
+      const tb = b.lastModified?.seconds || 0;
+      return tb - ta;
+    });
+
+    filteredFiles = [...allDeviceFiles];
+    renderFilesGrid(filteredFiles);
+  } catch (ex) {
+    showToast('Failed to load files: ' + ex.message, 'error');
+    document.getElementById('filesLoading').classList.add('hidden');
+    document.getElementById('filesEmpty').classList.remove('hidden');
+  }
+}
+window.openFilesModal = openFilesModal;
+
+function closeFilesModal(e) {
+  if (e && e.target !== document.getElementById('filesModal')) return;
+  document.getElementById('filesModal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+window.closeFilesModal = closeFilesModal;
+
+function renderFilesGrid(files) {
+  document.getElementById('filesLoading').classList.add('hidden');
+  const grid = document.getElementById('filesGrid');
+
+  document.getElementById('filesCountLabel').textContent =
+    `${files.length} file${files.length !== 1 ? 's' : ''}`;
+
+  if (!files.length) {
+    grid.classList.add('hidden');
+    document.getElementById('filesEmpty').classList.remove('hidden');
+    return;
+  }
+
+  document.getElementById('filesEmpty').classList.add('hidden');
+  grid.classList.remove('hidden');
+
+  // Build lightbox image list from visible images
+  lbImages = files
+    .filter(f => f.fileType === 'image' && f.storageUrl)
+    .map(f => ({ url: f.storageUrl, name: f.name }));
+
+  grid.innerHTML = files.map(f => buildFileCard(f)).join('');
+}
+
+function buildFileCard(file) {
+  const isImage  = file.fileType === 'image';
+  const sizeStr  = fmtSize(file.size || 0);
+  const dateStr  = fmtDate(file.lastModified?.seconds);
+  const ext      = (file.name || '').split('.').pop().toUpperCase().slice(0, 4);
+  const lbIdx    = lbImages.findIndex(x => x.url === file.storageUrl);
+
+  const thumb = isImage && file.storageUrl
+    ? `<img src="${esc(file.storageUrl)}" alt="${esc(file.name)}" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\\'file-type-icon\\'>🖼️</span>'" />`
+    : `<span class="file-type-icon">${FILE_TYPE_ICONS[file.fileType] || '📎'}</span>`;
+
+  return `
+    <div class="file-card" onclick="${isImage ? `openLightbox(${lbIdx})` : ''}">
+      <div class="file-thumb">
+        ${thumb}
+        <span class="file-type-badge">${esc(ext)}</span>
+      </div>
+      <div class="file-info">
+        <div class="file-name" title="${esc(file.name || '')}">${esc(file.name || 'Unknown')}</div>
+        <div class="file-meta">${sizeStr} · ${dateStr}</div>
+        <div class="file-actions" onclick="event.stopPropagation()">
+          ${isImage ? `<button class="file-btn view" onclick="openLightbox(${lbIdx})">👁 View</button>` : ''}
+          ${file.storageUrl
+            ? `<a class="file-btn dl" href="${esc(file.storageUrl)}" target="_blank" download="${esc(file.name||'')}">⬇ Download</a>`
+            : `<span class="file-btn" style="opacity:.4">No URL</span>`
+          }
+        </div>
+      </div>
+    </div>`;
+}
+
+// Filter by type tab
+function filterFiles(type, btn) {
+  activeTypeFilter = type;
+  document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  applyFilesFilter();
+}
+window.filterFiles = filterFiles;
+
+// Search by name
+function searchFiles() { applyFilesFilter(); }
+window.searchFiles = searchFiles;
+
+function applyFilesFilter() {
+  const q = (document.getElementById('filesSearchInput').value || '').toLowerCase();
+  filteredFiles = allDeviceFiles.filter(f => {
+    const typeOk = activeTypeFilter === 'all' || f.fileType === activeTypeFilter;
+    const nameOk = !q || (f.name || '').toLowerCase().includes(q);
+    return typeOk && nameOk;
+  });
+  renderFilesGrid(filteredFiles);
+}
+
+// ═══════════════════════════════════════════
+// LIGHTBOX
+// ═══════════════════════════════════════════
+function openLightbox(idx) {
+  if (!lbImages.length || idx < 0) return;
+  lbIndex = idx;
+  updateLightbox();
+  document.getElementById('lightbox').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+window.openLightbox = openLightbox;
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+window.closeLightbox = closeLightbox;
+
+function lbNav(dir, e) {
+  e?.stopPropagation();
+  lbIndex = (lbIndex + dir + lbImages.length) % lbImages.length;
+  updateLightbox();
+}
+window.lbNav = lbNav;
+
+function updateLightbox() {
+  const img = lbImages[lbIndex];
+  document.getElementById('lbImg').src          = img.url;
+  document.getElementById('lbName').textContent = img.name;
+  document.getElementById('lbDownload').href    = img.url;
+  document.getElementById('lbDownload').download= img.name;
+}
+
+// Keyboard navigation for lightbox
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightbox').classList.contains('hidden')) {
+    if (e.key === 'ArrowLeft')  lbNav(-1, null);
+    if (e.key === 'ArrowRight') lbNav(1, null);
+    if (e.key === 'Escape')     closeLightbox();
+  }
+});
 
 // ═══════════════════════════════════════════
 // UTILS
@@ -360,12 +494,24 @@ function showToast(msg, type = 'success') {
 }
 
 function togglePass() {
-  const input = document.getElementById('adminPass');
-  input.type = input.type === 'password' ? 'text' : 'password';
+  const i = document.getElementById('adminPass');
+  i.type = i.type === 'password' ? 'text' : 'password';
 }
-
 window.togglePass = togglePass;
 
-function escHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function esc(str) {
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024)           return `${bytes} B`;
+  if (bytes < 1024*1024)      return `${(bytes/1024).toFixed(1)} KB`;
+  if (bytes < 1024*1024*1024) return `${(bytes/1024/1024).toFixed(1)} MB`;
+  return `${(bytes/1024/1024/1024).toFixed(1)} GB`;
+}
+
+function fmtDate(secs) {
+  if (!secs) return '—';
+  return new Date(secs * 1000).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
 }
