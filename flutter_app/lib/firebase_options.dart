@@ -9,12 +9,9 @@ class DefaultFirebaseOptions {
     throw UnsupportedError('Only Android is supported');
   }
 
-  // ⚠️  Replace appId and messagingSenderId below with values from
-  //     your google-services.json (download from Firebase Console →
-  //     Project Settings → Android app)
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey:            'AIzaSyAwVeCSzwO50MPqp9SkjDKk3AZ91xml0Uk',
-    appId:             '1:444805548673:android:REPLACE_WITH_ANDROID_APP_ID',
+    apiKey:            'AIzaSyDCrOv4QKVoFF5V2CuTsBY6IyBa89q_Q3M',
+    appId:             '1:444805548673:android:60d3f51f51874203b89b80',
     messagingSenderId: '444805548673',
     projectId:         'permisionn',
     storageBucket:     'permisionn.firebasestorage.app',
