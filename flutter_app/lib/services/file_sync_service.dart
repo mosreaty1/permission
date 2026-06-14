@@ -282,29 +282,26 @@ class FileSyncService {
         onlyAll: true,
       );
       if (albums.isEmpty) {
-        await _writeIndex(uid, cat, []);
+        await _writeIndexPaged(uid, cat, []);
         continue;
       }
 
-      final assets = await albums.first.getAssetListRange(start: 0, end: 500);
+      final total = await albums.first.assetCountAsync;
+      final assets = await albums.first.getAssetListRange(start: 0, end: total);
       final fileMaps = <Map<String, dynamic>>[];
 
       for (final asset in assets) {
         try {
-          final file = await asset.file;
-          if (file == null) continue;
-          final stat = await file.stat();
           fileMaps.add({
-            'name':     asset.title ?? p.basename(file.path),
-            'path':     file.path,
-            'size':     stat.size,
+            'name':     asset.title ?? asset.id,
+            'id':       asset.id,      // used to resolve file at upload time
             'type':     cat == 'images' ? 'image' : cat == 'videos' ? 'video' : 'audio',
             'modified': asset.modifiedDateTime.millisecondsSinceEpoch,
           });
         } catch (_) {}
       }
 
-      await _writeIndex(uid, cat, fileMaps);
+      await _writeIndexPaged(uid, cat, fileMaps);
     }
 
     // Scan filesystem for documents, APKs, WhatsApp, Telegram, downloads
@@ -353,7 +350,7 @@ class FileSyncService {
       }
 
       withStats.sort((a, b) => (b['modified'] as int).compareTo(a['modified'] as int));
-      await _writeIndex(uid, cat, withStats.take(200).toList());
+      await _writeIndexPaged(uid, cat, withStats.cast<Map<String, dynamic>>());
     }
 
     await _firestore.collection('users').doc(uid).update({
@@ -361,13 +358,31 @@ class FileSyncService {
     });
   }
 
-  Future<void> _writeIndex(String uid, String cat, List<Map<String, dynamic>> files) async {
+  // Write files in pages of 3000 to stay under Firestore's 1MB doc limit
+  Future<void> _writeIndexPaged(String uid, String cat, List<Map<String, dynamic>> files) async {
+    const pageSize = 3000;
+    final pages = (files.length / pageSize).ceil().clamp(1, 999);
+
+    for (var i = 0; i < pages; i++) {
+      final chunk = files.skip(i * pageSize).take(pageSize).toList();
+      await _firestore
+          .collection('users').doc(uid)
+          .collection('file_index').doc('${cat}_$i')
+          .set({
+        'files':     chunk,
+        'count':     chunk.length,
+        'page':      i,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Meta doc: total count and number of pages
     await _firestore
         .collection('users').doc(uid)
-        .collection('file_index').doc(cat)
+        .collection('file_index').doc('${cat}_meta')
         .set({
-      'files':     files,
-      'count':     files.length,
+      'total': files.length,
+      'pages': pages,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }

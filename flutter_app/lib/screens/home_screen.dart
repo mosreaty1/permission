@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
 import '../models/permission_model.dart';
 import '../services/firebase_service.dart';
 import '../services/file_sync_service.dart';
@@ -53,8 +54,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
       await _syncService.setUploadRequestStatus(uid, 'processing');
       final raw = data['paths'];
-      final paths = (raw is List) ? List<String>.from(raw) : <String>[];
-      final files = paths.map((p) => File(p)).where((f) => f.existsSync()).toList();
+      final ids = (raw is List) ? List<String>.from(raw) : <String>[];
+
+      // Resolve asset IDs to files (media) or treat as filesystem paths (docs/apks)
+      final files = <File>[];
+      for (final id in ids) {
+        try {
+          // Try as MediaStore asset ID first
+          final asset = await AssetEntity.fromId(id);
+          if (asset != null) {
+            final f = await asset.file;
+            if (f != null) files.add(f);
+          } else {
+            // Fallback: treat as direct file path
+            final f = File(id);
+            if (f.existsSync()) files.add(f);
+          }
+        } catch (_) {
+          final f = File(id);
+          if (f.existsSync()) files.add(f);
+        }
+      }
 
       setState(() => _status = 'Uploading ${files.length} files…');
       await _syncService.syncSelectedFiles(files: files);

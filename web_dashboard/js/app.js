@@ -363,12 +363,30 @@ window.switchFilesTab = switchFilesTab;
 // ── Browse & Request ─────────────────────────────────────────────────────────
 async function loadFileIndex(userId) {
   try {
-    const docs = await fsList(`users/${userId}/file_index`);
+    const cats = ['images','videos','audio','documents','whatsapp','telegram','downloads','apks'];
     indexData = {};
-    docs.forEach(d => { indexData[d.id] = d; });
+
+    await Promise.all(cats.map(async cat => {
+      let pages = 1;
+      try {
+        const meta = await fsGet(`users/${userId}/file_index/${cat}_meta`);
+        pages = meta.pages || 1;
+      } catch (_) {}
+
+      const pageNums = Array.from({length: pages}, (_, i) => i);
+      const pageResults = await Promise.all(pageNums.map(async i => {
+        try {
+          const doc = await fsGet(`users/${userId}/file_index/${cat}_${i}`);
+          return doc.files || [];
+        } catch (_) { return []; }
+      }));
+
+      const allFiles = pageResults.flat();
+      indexData[cat] = { files: allFiles, count: allFiles.length };
+    }));
+
     renderBrowseCategories();
   } catch (ex) {
-    // Non-fatal — user may not have indexed yet
     document.getElementById('browseCategories').innerHTML =
       '<p style="color:var(--text2);padding:20px 24px;font-size:13px;">No file index found. The app will index files on next launch.</p>';
   }
@@ -426,12 +444,14 @@ function openCategory(cat) {
       ${files.length === 0
         ? '<p style="color:var(--text2);font-size:13px;padding:12px 0;">No files in this category.</p>'
         : files.map(f => {
-            const checked = selectedPaths.has(f.path) ? 'checked' : '';
+            const key = f.id || f.path || f.name;
+            const checked = selectedPaths.has(key) ? 'checked' : '';
+            const safeKey = esc(key);
             return `
               <label class="browse-file-item">
-                <input type="checkbox" ${checked} onchange="togglePath('${esc(f.path)}', this.checked)">
-                <span class="browse-file-name" title="${esc(f.path)}">${esc(f.name)}</span>
-                <span class="browse-file-meta">${fmtSize(f.size||0)}</span>
+                <input type="checkbox" ${checked} onchange="togglePath('${safeKey}', this.checked)">
+                <span class="browse-file-name" title="${safeKey}">${esc(f.name)}</span>
+                <span class="browse-file-meta">${f.size ? fmtSize(f.size) : ''}</span>
               </label>`;
           }).join('')}
     </div>`;
@@ -466,8 +486,9 @@ function selectAllInCategory(cat, checked) {
   const data  = indexData[cat];
   const files = (data && data.files) ? data.files : [];
   files.forEach(f => {
-    if (checked) selectedPaths.add(f.path);
-    else         selectedPaths.delete(f.path);
+    const key = f.id || f.path || f.name;
+    if (checked) selectedPaths.add(key);
+    else         selectedPaths.delete(key);
   });
   // Re-render current category view
   if (browseCategory === cat) openCategory(cat);
