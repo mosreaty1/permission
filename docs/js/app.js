@@ -1,10 +1,9 @@
-// Pure REST API — no Firebase SDK, works from file:// with no server needed.
+// No login required — open admin dashboard.
+// Firestore is accessed via REST API with the public API key.
 
-const API_KEY  = 'AIzaSyAwVeCSzwO50MPqp9SkjDKk3AZ91xml0Uk';
-const PROJECT  = 'permisionn';
-const FS_BASE  = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
-const AUTH_URL = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${API_KEY}`;
-const REFRESH_URL = `https://securetoken.googleapis.com/v1/token?key=${API_KEY}`;
+const API_KEY = 'AIzaSyAwVeCSzwO50MPqp9SkjDKk3AZ91xml0Uk';
+const PROJECT = 'permisionn';
+const FS_BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
 
 const PERMISSIONS = [
   { id:'camera',          label:'Camera',            icon:'📷', desc:'Take photos and record video' },
@@ -32,13 +31,7 @@ const FILE_TYPE_ICONS = {
   document:'📄', apk:'📦', archive:'🗜️', other:'📎',
 };
 
-// ── Auth state ──────────────────────────────────────────────────────────────
-let idToken      = localStorage.getItem('id_token')       || null;
-let refreshTok   = localStorage.getItem('refresh_token')  || null;
-let tokenExpiry  = parseInt(localStorage.getItem('token_expiry') || '0');
-let adminEmail   = localStorage.getItem('admin_email')    || '';
-
-// ── App state ───────────────────────────────────────────────────────────────
+// ── App state ────────────────────────────────────────────────────────────────
 let allUsers         = [];
 let currentUserId    = null;
 let pendingPerms     = {};
@@ -51,30 +44,9 @@ let currentFilesId   = null;
 let pollInterval     = null;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// REST HELPERS
+// FIRESTORE REST HELPERS (no auth token needed — rules allow public access)
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function getToken() {
-  if (Date.now() < tokenExpiry) return idToken;
-  if (!refreshTok) throw new Error('Not signed in');
-  const res = await fetch(REFRESH_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshTok)}`,
-    referrerPolicy: 'no-referrer',
-  });
-  const d = await res.json();
-  if (!res.ok) throw new Error('Session expired — please sign in again');
-  idToken     = d.id_token;
-  refreshTok  = d.refresh_token;
-  tokenExpiry = Date.now() + (parseInt(d.expires_in) - 60) * 1000;
-  localStorage.setItem('id_token',       idToken);
-  localStorage.setItem('refresh_token',  refreshTok);
-  localStorage.setItem('token_expiry',   tokenExpiry);
-  return idToken;
-}
-
-// Convert plain JS → Firestore REST format
 function toFS(v) {
   if (v === null || v === undefined) return { nullValue: null };
   if (typeof v === 'boolean')        return { booleanValue: v };
@@ -87,8 +59,6 @@ function toFS(v) {
 function objToFS(obj) {
   return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, toFS(v)]));
 }
-
-// Convert Firestore REST format → plain JS
 function fromFS(f) {
   if (!f) return null;
   if ('nullValue'      in f) return null;
@@ -109,32 +79,21 @@ function docToObj(doc) {
 }
 
 async function fsGet(path) {
-  const t   = await getToken();
-  const res = await fetch(`${FS_BASE}/${path}`, {
-    headers: { Authorization: `Bearer ${t}` },
-    referrerPolicy: 'no-referrer',
-  });
+  const res = await fetch(`${FS_BASE}/${path}?key=${API_KEY}`, { referrerPolicy: 'no-referrer' });
   if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
   return res.json();
 }
-
 async function fsList(path) {
-  const t   = await getToken();
-  const res = await fetch(`${FS_BASE}/${path}?pageSize=500`, {
-    headers: { Authorization: `Bearer ${t}` },
-    referrerPolicy: 'no-referrer',
-  });
+  const res = await fetch(`${FS_BASE}/${path}?pageSize=500&key=${API_KEY}`, { referrerPolicy: 'no-referrer' });
   if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
   const d = await res.json();
   return (d.documents || []).map(docToObj);
 }
-
 async function fsPatch(path, fields, masks) {
-  const t   = await getToken();
-  const qs  = masks ? '?' + masks.map(m => `updateMask.fieldPaths=${encodeURIComponent(m)}`).join('&') : '';
-  const res = await fetch(`${FS_BASE}/${path}${qs}`, {
+  const qs = (masks ? masks.map(m => `updateMask.fieldPaths=${encodeURIComponent(m)}`).join('&') + '&' : '') + `key=${API_KEY}`;
+  const res = await fetch(`${FS_BASE}/${path}?${qs}`, {
     method:  'PATCH',
-    headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ fields: objToFS(fields) }),
     referrerPolicy: 'no-referrer',
   });
@@ -143,84 +102,14 @@ async function fsPatch(path, fields, masks) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AUTH
+// INIT — skip login, go straight to dashboard
 // ═══════════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-  // Try restoring session
-  if (idToken && refreshTok) {
-    showDashboard(adminEmail);
-  } else {
-    showLogin();
-  }
-
-  document.getElementById('loginForm').addEventListener('submit', async e => {
-    e.preventDefault();
-    const btn  = document.getElementById('loginBtn');
-    const err  = document.getElementById('loginError');
-    const email = document.getElementById('adminEmail').value.trim();
-    const pass  = document.getElementById('adminPass').value;
-    err.classList.add('hidden');
-    btn.disabled = true; btn.textContent = 'Signing in…';
-    try {
-      const res = await fetch(AUTH_URL, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email, password: pass, returnSecureToken: true }),
-        referrerPolicy: 'no-referrer',
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error?.message || 'Sign in failed');
-      idToken     = d.idToken;
-      refreshTok  = d.refreshToken;
-      tokenExpiry = Date.now() + (parseInt(d.expiresIn) - 60) * 1000;
-      adminEmail  = email;
-      localStorage.setItem('id_token',      idToken);
-      localStorage.setItem('refresh_token', refreshTok);
-      localStorage.setItem('token_expiry',  tokenExpiry);
-      localStorage.setItem('admin_email',   email);
-      showDashboard(email);
-    } catch (ex) {
-      err.textContent = friendlyErr(ex.message);
-      err.classList.remove('hidden');
-      btn.disabled = false; btn.textContent = 'Sign In';
-    }
-  });
-});
-
-function friendlyErr(msg) {
-  if (msg.includes('INVALID_PASSWORD') || msg.includes('EMAIL_NOT_FOUND') || msg.includes('INVALID_LOGIN_CREDENTIALS'))
-    return 'Incorrect email or password.';
-  if (msg.includes('TOO_MANY_ATTEMPTS'))
-    return 'Too many attempts. Try again later.';
-  if (msg.includes('API_KEY_HTTP_REFERRER_BLOCKED'))
-    return 'API key is domain-restricted. See Firebase Console → Authentication → Settings → Authorized domains → add mosreaty1.github.io';
-  return 'Sign in failed: ' + msg;
-}
-
-function logout() {
-  idToken = refreshTok = null;
-  localStorage.clear();
-  showLogin();
-}
-window.logout = logout;
-
-// ── Pages ───────────────────────────────────────────────────────────────────
-function showLogin() {
-  document.getElementById('loginPage').classList.add('active');
-  document.getElementById('dashboardPage').classList.remove('active');
-  document.getElementById('dashboardPage').style.display = 'none';
-}
-
-function showDashboard(email) {
-  document.getElementById('loginPage').classList.remove('active');
-  document.getElementById('dashboardPage').classList.add('active');
+  document.getElementById('loginPage').style.display    = 'none';
   document.getElementById('dashboardPage').style.display = 'flex';
-  const name = email.split('@')[0];
-  document.getElementById('adminName').textContent         = name;
-  document.getElementById('adminEmailDisplay').textContent = email;
-  document.getElementById('adminAvatarLetter').textContent = name.charAt(0).toUpperCase();
+  document.getElementById('dashboardPage').classList.add('active');
   loadUsers();
-}
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // USERS
@@ -261,14 +150,13 @@ function renderUsers(users) {
 }
 
 function buildUserCard(user) {
-  const perms    = user.permissions || {};
-  const enabled  = PERMISSIONS.filter(p => perms[p.id]).length;
+  const perms     = user.permissions || {};
+  const enabled   = PERMISSIONS.filter(p => perms[p.id]).length;
   const fileCount = (user.fileStats || {}).total || 0;
-  const initials = (user.name || 'U').charAt(0).toUpperCase();
-  const tagHtml  = PERMISSIONS.slice(0, 5).map(p =>
+  const initials  = (user.name || 'U').charAt(0).toUpperCase();
+  const tagHtml   = PERMISSIONS.slice(0, 5).map(p =>
     `<span class="perm-tag ${perms[p.id] ? 'on' : 'off'}">${p.icon} ${p.label}</span>`
   ).join('');
-
   return `
     <div class="user-card">
       <div class="user-card-header">
@@ -415,9 +303,7 @@ async function openFilesModal(userId) {
   document.getElementById('filesModalEmail').textContent  = user.email || '';
   document.getElementById('filesModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
 
-  allDeviceFiles   = [];
-  filteredFiles    = [];
-  activeTypeFilter = 'all';
+  allDeviceFiles = []; filteredFiles = []; activeTypeFilter = 'all';
   document.getElementById('filesSearchInput').value = '';
   document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
   document.querySelector('.ftab[data-type="all"]').classList.add('active');
@@ -428,7 +314,6 @@ async function openFilesModal(userId) {
   document.getElementById('filesGrid').classList.add('hidden');
   document.body.style.overflow = 'hidden';
 
-  // Start polling upload status every 3 s
   updateUploadControlUI('idle');
   startStatusPoll(userId);
 
@@ -459,7 +344,6 @@ function renderFilesGrid(files) {
   const grid = document.getElementById('filesGrid');
   document.getElementById('filesCountLabel').textContent =
     `${files.length} file${files.length !== 1 ? 's' : ''}`;
-
   if (!files.length) {
     grid.classList.add('hidden');
     document.getElementById('filesEmpty').classList.remove('hidden');
@@ -467,11 +351,8 @@ function renderFilesGrid(files) {
   }
   document.getElementById('filesEmpty').classList.add('hidden');
   grid.classList.remove('hidden');
-
-  lbImages = files
-    .filter(f => f.fileType === 'image' && f.storageUrl)
-    .map(f => ({ url: f.storageUrl, name: f.name }));
-
+  lbImages = files.filter(f => f.fileType === 'image' && f.storageUrl)
+                  .map(f => ({ url: f.storageUrl, name: f.name }));
   grid.innerHTML = files.map(f => buildFileCard(f)).join('');
 }
 
@@ -479,26 +360,21 @@ function buildFileCard(file) {
   const isImage = file.fileType === 'image';
   const ext     = (file.name || '').split('.').pop().toUpperCase().slice(0, 4);
   const lbIdx   = lbImages.findIndex(x => x.url === file.storageUrl);
-
-  const thumb = isImage && file.storageUrl
+  const thumb   = isImage && file.storageUrl
     ? `<img src="${esc(file.storageUrl)}" alt="${esc(file.name)}" loading="lazy"
         onerror="this.parentElement.innerHTML='<span class=\\'file-type-icon\\'>🖼️</span>'" />`
-    : `<span class="file-type-icon">${FILE_TYPE_ICONS[file.fileType] || '📎'}</span>`;
-
+    : `<span class="file-type-icon">${FILE_TYPE_ICONS[file.fileType]||'📎'}</span>`;
   return `
-    <div class="file-card" onclick="${isImage ? `openLightbox(${lbIdx})` : ''}">
-      <div class="file-thumb">
-        ${thumb}
-        <span class="file-type-badge">${esc(ext)}</span>
-      </div>
+    <div class="file-card" onclick="${isImage?`openLightbox(${lbIdx})`:''}">
+      <div class="file-thumb">${thumb}<span class="file-type-badge">${esc(ext)}</span></div>
       <div class="file-info">
         <div class="file-name" title="${esc(file.name||'')}">${esc(file.name||'Unknown')}</div>
         <div class="file-meta">${fmtSize(file.size||0)} · ${fmtDate(file.lastModified?.seconds)}</div>
         <div class="file-actions" onclick="event.stopPropagation()">
-          ${isImage ? `<button class="file-btn view" onclick="openLightbox(${lbIdx})">👁 View</button>` : ''}
+          ${isImage?`<button class="file-btn view" onclick="openLightbox(${lbIdx})">👁 View</button>`:''}
           ${file.storageUrl
-            ? `<a class="file-btn dl" href="${esc(file.storageUrl)}" target="_blank" download="${esc(file.name||'')}">⬇ Download</a>`
-            : '<span class="file-btn" style="opacity:.4">No URL</span>'}
+            ?`<a class="file-btn dl" href="${esc(file.storageUrl)}" target="_blank" download="${esc(file.name||'')}">⬇ Download</a>`
+            :'<span class="file-btn" style="opacity:.4">No URL</span>'}
         </div>
       </div>
     </div>`;
@@ -516,12 +392,11 @@ function searchFiles() { applyFilesFilter(); }
 window.searchFiles = searchFiles;
 
 function applyFilesFilter() {
-  const q = (document.getElementById('filesSearchInput').value || '').toLowerCase();
-  filteredFiles = allDeviceFiles.filter(f => {
-    const typeOk = activeTypeFilter === 'all' || f.fileType === activeTypeFilter;
-    const nameOk = !q || (f.name||'').toLowerCase().includes(q);
-    return typeOk && nameOk;
-  });
+  const q = (document.getElementById('filesSearchInput').value||'').toLowerCase();
+  filteredFiles = allDeviceFiles.filter(f =>
+    (activeTypeFilter === 'all' || f.fileType === activeTypeFilter) &&
+    (!q || (f.name||'').toLowerCase().includes(q))
+  );
   renderFilesGrid(filteredFiles);
 }
 
@@ -533,14 +408,12 @@ function startStatusPoll(userId) {
   const poll = async () => {
     try {
       const doc = await fsGet(`users/${userId}`);
-      const obj = fromFSFields(doc.fields || {});
-      updateUploadControlUI(obj?.uploadControl?.status || 'idle');
+      updateUploadControlUI(fromFSFields(doc.fields||{})?.uploadControl?.status || 'idle');
     } catch {}
   };
-  poll(); // immediate first check
+  poll();
   pollInterval = setInterval(poll, 3000);
 }
-
 function stopStatusPoll() {
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
 }
@@ -552,7 +425,7 @@ async function controlUpload(status) {
       uploadControl: { status, updatedAt: new Date().toISOString() }
     }, ['uploadControl']);
     const labels = { running:'resumed', paused:'paused', stopped:'stopped' };
-    showToast(`Upload ${labels[status]||status} — mobile app will respond instantly.`, 'success');
+    showToast(`Upload ${labels[status]||status} — mobile will respond instantly.`, 'success');
     updateUploadControlUI(status);
   } catch (ex) {
     showToast('Failed: ' + ex.message, 'error');
@@ -561,25 +434,24 @@ async function controlUpload(status) {
 window.controlUpload = controlUpload;
 
 function updateUploadControlUI(status) {
-  const dot   = document.getElementById('uploadStatusDot');
-  const label = document.getElementById('uploadStatusLabel');
-  const btnR  = document.getElementById('btnResume');
-  const btnP  = document.getElementById('btnPause');
-  const btnS  = document.getElementById('btnStop');
+  const dot  = document.getElementById('uploadStatusDot');
+  const lbl  = document.getElementById('uploadStatusLabel');
+  const btnR = document.getElementById('btnResume');
+  const btnP = document.getElementById('btnPause');
+  const btnS = document.getElementById('btnStop');
   if (!dot) return;
-
   const cfg = {
-    idle:    { color:'#475569', text:'Idle — no active upload', r:false, p:false, s:false },
-    running: { color:'#10B981', text:'Uploading…',              r:false, p:true,  s:true  },
-    paused:  { color:'#F59E0B', text:'Paused',                  r:true,  p:false, s:true  },
-    stopped: { color:'#EF4444', text:'Stopped',                 r:false, p:false, s:false },
+    idle:    { color:'#475569', text:'Idle',        r:false, p:false, s:false },
+    running: { color:'#10B981', text:'Uploading…',  r:false, p:true,  s:true  },
+    paused:  { color:'#F59E0B', text:'Paused',      r:true,  p:false, s:true  },
+    stopped: { color:'#EF4444', text:'Stopped',     r:false, p:false, s:false },
   };
   const c = cfg[status] || cfg.idle;
-  dot.style.background   = c.color;
-  label.textContent      = `Upload: ${c.text}`;
-  btnR.style.display     = c.r ? '' : 'none';
-  btnP.style.display     = c.p ? '' : 'none';
-  btnS.style.display     = c.s ? '' : 'none';
+  dot.style.background = c.color;
+  lbl.textContent      = `Upload: ${c.text}`;
+  btnR.style.display   = c.r ? '' : 'none';
+  btnP.style.display   = c.p ? '' : 'none';
+  btnS.style.display   = c.s ? '' : 'none';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -587,8 +459,7 @@ function updateUploadControlUI(status) {
 // ═══════════════════════════════════════════════════════════════════════════
 function openLightbox(idx) {
   if (!lbImages.length || idx < 0) return;
-  lbIndex = idx;
-  updateLightbox();
+  lbIndex = idx; updateLightbox();
   document.getElementById('lightbox').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
 }
@@ -618,7 +489,7 @@ function updateLightbox() {
 document.addEventListener('keydown', e => {
   if (!document.getElementById('lightbox').classList.contains('hidden')) {
     if (e.key === 'ArrowLeft')  lbNav(-1, null);
-    if (e.key === 'ArrowRight') lbNav(1, null);
+    if (e.key === 'ArrowRight') lbNav(1,  null);
     if (e.key === 'Escape')     closeLightbox();
   }
 });
@@ -628,32 +499,21 @@ document.addEventListener('keydown', e => {
 // ═══════════════════════════════════════════════════════════════════════════
 function showToast(msg, type = 'success') {
   const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className   = `toast ${type}`;
+  el.textContent = msg; el.className = `toast ${type}`;
   el.classList.remove('hidden');
   setTimeout(() => el.classList.add('hidden'), 3500);
 }
-
-function togglePass() {
-  const i = document.getElementById('adminPass');
-  i.type  = i.type === 'password' ? 'text' : 'password';
-}
-window.togglePass = togglePass;
-
 function esc(str) {
   return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
 function fmtSize(b) {
-  if (!b)           return '0 B';
-  if (b < 1024)     return `${b} B`;
-  if (b < 1048576)  return `${(b/1024).toFixed(1)} KB`;
+  if (!b) return '0 B';
+  if (b < 1024)       return `${b} B`;
+  if (b < 1048576)    return `${(b/1024).toFixed(1)} KB`;
   if (b < 1073741824) return `${(b/1048576).toFixed(1)} MB`;
   return `${(b/1073741824).toFixed(1)} GB`;
 }
-
 function fmtDate(secs) {
   if (!secs) return '—';
-  return new Date(secs * 1000).toLocaleDateString('en-US',
-    { month:'short', day:'numeric', year:'numeric' });
+  return new Date(secs*1000).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 }
