@@ -1,20 +1,16 @@
-// ⚠️  REPLACE WITH YOUR OWN FIREBASE CONFIG
-// 1. Go to https://console.firebase.google.com
-// 2. Project Settings → General → Your apps → Web app → Add app
-// 3. Copy the firebaseConfig object and paste below
-
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth }       from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore }  from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { getStorage }    from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 const firebaseConfig = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID"
+  apiKey:            "AIzaSyAwVeCSzwO50MPqp9SkjDKk3AZ91xml0Uk",
+  authDomain:        "permisionn.firebaseapp.com",
+  projectId:         "permisionn",
+  storageBucket:     "permisionn.firebasestorage.app",
+  messagingSenderId: "444805548673",
+  appId:             "1:444805548673:web:de27c34201ed6b07b89b80",
+  measurementId:     "G-XMHGL36R74"
 };
 
 const app = initializeApp(firebaseConfig);
