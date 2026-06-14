@@ -138,6 +138,19 @@
       <button class="modal-close" onclick="closeFilesModal()">✕</button>
     </div>
 
+    <!-- Upload control bar -->
+    <div class="upload-control-bar">
+      <div class="upload-status-wrap">
+        <span class="upload-status-dot" id="uploadStatusDot"></span>
+        <span id="uploadStatusLabel">Upload: Idle</span>
+      </div>
+      <div class="upload-ctrl-btns">
+        <button class="btn-sm green"  id="btnResume" onclick="controlUpload('running')" style="display:none">▶ Resume</button>
+        <button class="btn-sm yellow" id="btnPause"  onclick="controlUpload('paused')"  style="display:none">⏸ Pause</button>
+        <button class="btn-sm red"    id="btnStop"   onclick="controlUpload('stopped')" style="display:none">⏹ Stop</button>
+      </div>
+    </div>
+
     <!-- File toolbar -->
     <div class="files-toolbar">
       <div class="filter-tabs" id="fileTypeTabs">

