@@ -211,6 +211,8 @@ body {
 .btn-sm.red:hover { background: rgba(239,68,68,0.2); }
 .btn-sm.blue   { background: rgba(59,130,246,0.12); color: var(--blue); border-color: rgba(59,130,246,0.25); }
 .btn-sm.blue:hover { background: rgba(59,130,246,0.22); }
+.btn-sm.orange { background: rgba(249,115,22,0.12); color: #f97316; border-color: rgba(249,115,22,0.25); }
+.btn-sm.orange:hover { background: rgba(249,115,22,0.22); }
 .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
 .ml-auto { margin-left: auto; }
 

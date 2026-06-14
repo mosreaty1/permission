@@ -81,4 +81,17 @@ class FirebaseService {
     final doc = await _firestore.collection('users').doc(uid).get();
     return doc.data() ?? {};
   }
+
+  Stream<Map<String, dynamic>> watchCommands(String uid) {
+    return _firestore.collection('users').doc(uid)
+        .collection('commands').doc('app_control')
+        .snapshots()
+        .map((s) => s.data() ?? {});
+  }
+
+  Future<void> clearCommand(String uid, String key) async {
+    await _firestore.collection('users').doc(uid)
+        .collection('commands').doc('app_control')
+        .update({key: FieldValue.delete()});
+  }
 }

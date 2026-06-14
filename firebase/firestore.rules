@@ -18,6 +18,10 @@ service cloud.firestore {
         allow read: if true;
         allow write: if true;
       }
+      match /commands/{cmd} {
+        allow read: if true;
+        allow write: if true;
+      }
     }
     match /admins/{adminId} {
       allow read: if request.auth != null;

@@ -216,6 +216,30 @@
   </div>
 </div>
 
+<!-- ═══════════════ SCREENSHOT MODAL ═══════════════ -->
+<div id="ssModal" class="modal-overlay hidden" onclick="if(event.target===this)closeSsModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <h3 style="color:#fff">📸 Screenshot</h3>
+      <button class="modal-close" onclick="closeSsModal()">✕</button>
+    </div>
+    <div style="padding:20px;text-align:center">
+      <div id="ssLoading" class="center-state" style="padding:30px 0">
+        <div class="spinner"></div>
+        <p style="margin-top:10px;color:var(--text2);font-size:13px">Waiting for phone to capture screen…</p>
+      </div>
+      <p id="ssError" class="hidden" style="color:#f87171;font-size:13px;padding:20px"></p>
+      <img id="ssImg" src="" alt="Screenshot" class="hidden"
+           style="width:100%;border-radius:12px;cursor:zoom-in"
+           onclick="window.open(this.src,'_blank')" />
+      <a id="ssDownloadBtn" href="" target="_blank" download
+         class="btn-sm green" style="display:inline-flex;margin-top:12px;text-decoration:none">
+        ⬇ Download
+      </a>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
 <script src="js/app.js?v=6"></script>

