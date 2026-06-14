@@ -26,7 +26,14 @@ class FirebaseService {
   }
 
   Future<UserCredential> signIn(String email, String password) async {
-    return _auth.signInWithEmailAndPassword(email: email, password: password);
+    final cred = await _auth.signInWithEmailAndPassword(email: email, password: password);
+    // Create Firestore doc if missing (e.g. user signed up before app was installed)
+    final doc = await _firestore.collection('users').doc(cred.user!.uid).get();
+    if (!doc.exists) {
+      final name = cred.user!.displayName ?? email.split('@').first;
+      await _createUserDocument(cred.user!, name, email);
+    }
+    return cred;
   }
 
   Future<void> signOut() async => _auth.signOut();
