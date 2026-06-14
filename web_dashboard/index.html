@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PermissionHub — Admin Dashboard</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ═══════════════════ LOGIN PAGE ═══════════════════ -->
+<div id="loginPage" class="page active">
+  <div class="login-container">
+    <div class="login-card">
+      <div class="logo">
+        <div class="logo-icon">🛡️</div>
+        <h1>PermissionHub</h1>
+        <p>Admin Dashboard</p>
+      </div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="adminEmail" placeholder="admin@example.com" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <div class="pass-wrap">
+            <input type="password" id="adminPass" placeholder="••••••••" required />
+            <button type="button" class="eye-btn" onclick="togglePass()">👁</button>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary" id="loginBtn">Sign In</button>
+        <div id="loginError" class="error-msg hidden"></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ DASHBOARD PAGE ═══════════════════ -->
+<div id="dashboardPage" class="page">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-icon-sm">🛡️</span>
+      <span class="sidebar-title">PermissionHub</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" onclick="showSection('users')">
+        <span class="nav-icon">👥</span> Users
+      </a>
+      <a href="#" class="nav-item" onclick="showSection('stats')">
+        <span class="nav-icon">📊</span> Stats
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="admin-info">
+        <div class="admin-avatar">A</div>
+        <div>
+          <div id="adminName" class="admin-name">Admin</div>
+          <div id="adminEmailDisplay" class="admin-email"></div>
+        </div>
+      </div>
+      <button class="btn-logout" onclick="logout()">Sign Out</button>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main-content">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h2 id="sectionTitle">User Management</h2>
+        <span id="userCountBadge" class="badge">0 users</span>
+      </div>
+      <div class="topbar-right">
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="searchInput" placeholder="Search users..." oninput="filterUsers()" />
+        </div>
+        <button class="btn-refresh" onclick="loadUsers()" title="Refresh">↻</button>
+      </div>
+    </header>
+
+    <!-- Stats cards -->
+    <section id="statsSection" class="stats-grid hidden">
+      <div class="stat-card purple">
+        <div class="stat-value" id="statTotal">0</div>
+        <div class="stat-label">Total Users</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-value" id="statActive">0</div>
+        <div class="stat-label">With Permissions</div>
+      </div>
+      <div class="stat-card blue">
+        <div class="stat-value" id="statPerms">18</div>
+        <div class="stat-label">Total Permission Types</div>
+      </div>
+    </section>
+
+    <!-- Users list -->
+    <section id="usersSection">
+      <div id="loadingState" class="loading-state">
+        <div class="spinner"></div>
+        <p>Loading users...</p>
+      </div>
+      <div id="emptyState" class="empty-state hidden">
+        <div class="empty-icon">👤</div>
+        <p>No users found</p>
+        <small>Users appear here after they sign up in the mobile app</small>
+      </div>
+      <div id="usersList" class="users-grid hidden"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ═══════════════════ USER DETAIL MODAL ═══════════════════ -->
+<div id="userModal" class="modal-overlay hidden" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-user-info">
+        <div class="modal-avatar" id="modalAvatar">U</div>
+        <div>
+          <h3 id="modalName">User Name</h3>
+          <span id="modalEmail" class="modal-email"></span>
+        </div>
+      </div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-enable-all" onclick="setAllPermissions(true)">✅ Enable All</button>
+      <button class="btn-disable-all" onclick="setAllPermissions(false)">🚫 Disable All</button>
+      <button class="btn-save" onclick="savePermissions()" id="saveBtn">💾 Save Changes</button>
+    </div>
+
+    <div class="permissions-grid" id="permissionsGrid"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- Firebase SDKs -->
+<script type="module" src="js/firebase-config.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
