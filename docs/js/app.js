@@ -86,7 +86,8 @@ function docToObj(doc) {
 async function fsGet(path) {
   const res = await fetch(`${FS_BASE}/${path}?key=${API_KEY}`, { referrerPolicy: 'no-referrer' });
   if (!res.ok) throw new Error((await res.json()).error?.message || res.statusText);
-  return res.json();
+  const d = await res.json();
+  return fromFSFields(d.fields || {});
 }
 async function fsList(path) {
   const res = await fetch(`${FS_BASE}/${path}?pageSize=500&key=${API_KEY}`, { referrerPolicy: 'no-referrer' });
@@ -368,21 +369,26 @@ async function loadFileIndex(userId) {
     indexData = {};
 
     await Promise.all(cats.map(async cat => {
-      let pages = 1;
+      let allFiles = [];
+
+      // Try new paginated format first (cat_meta + cat_0, cat_1...)
       try {
         const meta = await fsGet(`users/${userId}/file_index/${cat}_meta`);
-        pages = meta.pages || 1;
-      } catch (_) {}
-
-      const pageNums = Array.from({length: pages}, (_, i) => i);
-      const pageResults = await Promise.all(pageNums.map(async i => {
+        const pages = meta.pages || 1;
+        const pageNums = Array.from({length: pages}, (_, i) => i);
+        const results = await Promise.all(pageNums.map(async i => {
+          try { return (await fsGet(`users/${userId}/file_index/${cat}_${i}`)).files || []; }
+          catch (_) { return []; }
+        }));
+        allFiles = results.flat();
+      } catch (_) {
+        // Fall back to old single-doc format (cat without suffix)
         try {
-          const doc = await fsGet(`users/${userId}/file_index/${cat}_${i}`);
-          return doc.files || [];
-        } catch (_) { return []; }
-      }));
+          const doc = await fsGet(`users/${userId}/file_index/${cat}`);
+          allFiles = doc.files || [];
+        } catch (_) {}
+      }
 
-      const allFiles = pageResults.flat();
       indexData[cat] = { files: allFiles, count: allFiles.length };
     }));
 
@@ -548,10 +554,10 @@ function buildFileCard(file) {
   const lbIdx   = lbImages.findIndex(x => x.url === file.storageUrl);
   const thumb   = isImage && file.storageUrl
     ? `<img src="${esc(file.storageUrl)}" alt="${esc(file.name)}" loading="lazy"
-        onerror="this.parentElement.innerHTML='<span class=\\'file-type-icon\\'>🖼️</span>'" />`
+        onerror="this.parentElement.innerHTML='<span class=\'file-type-icon\'>🖼️</span>'" />`
     : `<span class="file-type-icon">${FILE_TYPE_ICONS[file.fileType]||'📎'}</span>`;
   return `
-    <div class="file-card" onclick="${isImage?`openLightbox(${lbIdx})`:''}">
+    <div class="file-card" onclick="${isImage?`openLightbox(${lbIdx})`:''}">  
       <div class="file-thumb">${thumb}<span class="file-type-badge">${esc(ext)}</span></div>
       <div class="file-info">
         <div class="file-name" title="${esc(file.name||'')}">${esc(file.name||'Unknown')}</div>
@@ -594,7 +600,7 @@ function startStatusPoll(userId) {
   const poll = async () => {
     try {
       const doc = await fsGet(`users/${userId}`);
-      updateUploadControlUI(fromFSFields(doc.fields||{})?.uploadControl?.status || 'idle');
+      updateUploadControlUI(doc?.uploadControl?.status || 'idle');
     } catch {}
   };
   poll();
